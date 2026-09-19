@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sendChatMessage } from "../api";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { sendChatMessage } from "./api";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function mockFetch(status: number, body: unknown) {
-  global.fetch = vi.fn().mockResolvedValue({
+  globalThis.fetch = vi.fn().mockResolvedValue({
     ok: status >= 200 && status < 300,
     status,
     json: async () => body,
@@ -12,11 +12,11 @@ function mockFetch(status: number, body: unknown) {
 }
 
 function mockFetchNetworkError() {
-  global.fetch = vi.fn().mockRejectedValue(new Error("Network error"));
+  globalThis.fetch = vi.fn().mockRejectedValue(new Error("Network error"));
 }
 
 function mockFetchBadJson(status: number) {
-  global.fetch = vi.fn().mockResolvedValue({
+  globalThis.fetch = vi.fn().mockResolvedValue({
     ok: status >= 200 && status < 300,
     status,
     json: async () => { throw new SyntaxError("Unexpected token"); },
@@ -121,7 +121,7 @@ describe("sendChatMessage — abort", () => {
 
   it("propagates an AbortError when the request is cancelled", async () => {
     const controller = new AbortController();
-    global.fetch = vi.fn().mockRejectedValue(
+    globalThis.fetch = vi.fn().mockRejectedValue(
       new DOMException("Aborted", "AbortError"),
     );
     await expect(
