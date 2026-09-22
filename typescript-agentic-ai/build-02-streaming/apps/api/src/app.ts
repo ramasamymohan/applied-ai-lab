@@ -3,11 +3,11 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import { registerChatRoutes } from "./routes/chat.js";
-import type { ChatService } from "./services/chat-service.js";
+import type { ChatStreamingService } from "./streaming/chat-streaming-service.js";
 
 type BuildAppOptions = {
   webOrigin: string;
-  chatService: ChatService;
+  chatStreamingService: ChatStreamingService;
 };
 
 export async function buildApp(options: BuildAppOptions) {
@@ -31,7 +31,7 @@ export async function buildApp(options: BuildAppOptions) {
   }));
 
   await registerChatRoutes(app, {
-    chatService: options.chatService,
+    chatStreamingService: options.chatStreamingService,
   });
 
   return app;

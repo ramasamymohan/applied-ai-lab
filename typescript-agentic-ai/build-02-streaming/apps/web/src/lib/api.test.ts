@@ -1,131 +1,228 @@
+/**
+ * Tests for the streaming chat API client.
+ *
+ * Uses vi.stubGlobal to mock fetch so no real network calls are made.
+ * Uses ReadableStream to simulate an SSE response body.
+ */
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sendChatMessage } from "./api";
+import { streamChatMessage } from "./api";
+import type { StreamCallbacks } from "./api";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function mockFetch(status: number, body: unknown) {
-  global.fetch = vi.fn().mockResolvedValue({
-    ok: status >= 200 && status < 300,
+function encodeSSE(events: string[]): Uint8Array {
+  return new TextEncoder().encode(events.join(""));
+}
+
+function sseFrame(eventName: string, data: unknown): string {
+  return `event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+function makeResponse(
+  body: Uint8Array | string,
+  options: { status?: number; contentType?: string } = {},
+): Response {
+  const { status = 200, contentType = "text/event-stream" } = options;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(
+        typeof body === "string" ? new TextEncoder().encode(body) : body,
+      );
+      controller.close();
+    },
+  });
+  return new Response(stream, {
     status,
-    json: async () => body,
-  } as Response);
+    headers: { "Content-Type": contentType },
+  });
 }
 
-function mockFetchNetworkError() {
-  global.fetch = vi.fn().mockRejectedValue(new Error("Network error"));
+function collectCallbacks(): {
+  callbacks: StreamCallbacks;
+  deltas: string[];
+  done: boolean;
+  errors: string[];
+} {
+  const deltas: string[] = [];
+  let done = false;
+  const errors: string[] = [];
+
+  const callbacks: StreamCallbacks = {
+    onDelta: (text) => { deltas.push(text); },
+    onDone: () => { done = true; },
+    onError: (msg) => { errors.push(msg); },
+  };
+
+  return { callbacks, deltas, done, errors };
 }
 
-function mockFetchBadJson(status: number) {
-  global.fetch = vi.fn().mockResolvedValue({
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => { throw new SyntaxError("Unexpected token"); },
-  } as unknown as Response);
+// Wait for all microtasks and pending promises to settle
+function flushPromises(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-// ── Success ───────────────────────────────────────────────────────────────────
+// ── Setup ─────────────────────────────────────────────────────────────────────
 
-describe("sendChatMessage — success", () => {
-  afterEach(() => vi.restoreAllMocks());
+beforeEach(() => {
+  vi.stubGlobal("fetch", vi.fn());
+});
 
-  it("returns the reply string from a successful response", async () => {
-    mockFetch(200, { reply: "Here are some great headphones." });
-    const result = await sendChatMessage("Help me pick headphones.");
-    expect(result).toBe("Here are some great headphones.");
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+// ── Successful streaming ──────────────────────────────────────────────────────
+
+describe("streamChatMessage — successful stream", () => {
+  it("calls onDelta for each text delta and onDone on completion", async () => {
+    const body = encodeSSE([
+      sseFrame("delta", { text: "Hello" }),
+      sseFrame("delta", { text: ", world" }),
+      sseFrame("done", {}),
+    ]);
+    vi.mocked(fetch).mockResolvedValue(makeResponse(body));
+
+    const { callbacks, deltas, done } = collectCallbacks();
+    streamChatMessage("Hi", callbacks);
+    await flushPromises();
+
+    expect(deltas).toEqual(["Hello", ", world"]);
+    expect(done).toBe(true);
   });
 
-  it("passes the message in the request body", async () => {
-    mockFetch(200, { reply: "Got it." });
-    await sendChatMessage("What is the return policy?");
-    const call = vi.mocked(fetch).mock.calls[0];
-    const body = JSON.parse(call[1]?.body as string);
-    expect(body).toEqual({ message: "What is the return policy?" });
+  it("handles a single delta followed by done", async () => {
+    const body = encodeSSE([
+      sseFrame("delta", { text: "Yes." }),
+      sseFrame("done", {}),
+    ]);
+    vi.mocked(fetch).mockResolvedValue(makeResponse(body));
+
+    const { callbacks, deltas, done } = collectCallbacks();
+    streamChatMessage("Any question", callbacks);
+    await flushPromises();
+
+    expect(deltas).toEqual(["Yes."]);
+    expect(done).toBe(true);
   });
 
-  it("posts to /api/chat with JSON content type", async () => {
-    mockFetch(200, { reply: "Sure." });
-    await sendChatMessage("Hello");
-    const call = vi.mocked(fetch).mock.calls[0];
-    expect(call[0]).toContain("/api/chat");
-    expect((call[1]?.headers as Record<string, string>)["Content-Type"]).toBe(
-      "application/json",
-    );
+  it("handles an empty stream (no deltas, just done)", async () => {
+    const body = encodeSSE([sseFrame("done", {})]);
+    vi.mocked(fetch).mockResolvedValue(makeResponse(body));
+
+    const { callbacks, deltas, done } = collectCallbacks();
+    streamChatMessage("hi", callbacks);
+    await flushPromises();
+
+    expect(deltas).toHaveLength(0);
+    expect(done).toBe(true);
   });
 });
 
-// ── Server error responses ────────────────────────────────────────────────────
+// ── Error handling ────────────────────────────────────────────────────────────
 
-describe("sendChatMessage — server errors", () => {
-  afterEach(() => vi.restoreAllMocks());
+describe("streamChatMessage — error events", () => {
+  it("calls onError when the SSE stream contains an error event", async () => {
+    const body = encodeSSE([
+      sseFrame("delta", { text: "partial" }),
+      sseFrame("error", { message: "Generation failed." }),
+    ]);
+    vi.mocked(fetch).mockResolvedValue(makeResponse(body));
 
-  it("throws the server error message when the error shape is valid", async () => {
-    mockFetch(502, {
-      error: {
-        code: "MODEL_REQUEST_FAILED",
-        message: "The assistant is temporarily unavailable. Please try again.",
-      },
-    });
-    await expect(sendChatMessage("Hello")).rejects.toThrow(
-      "The assistant is temporarily unavailable. Please try again.",
-    );
+    const { callbacks, errors } = collectCallbacks();
+    streamChatMessage("hi", callbacks);
+    await flushPromises();
+
+    expect(errors).toEqual(["Generation failed."]);
   });
 
-  it("falls back to a generic message when the error shape is unexpected", async () => {
-    mockFetch(500, { unexpected: "shape" });
-    await expect(sendChatMessage("Hello")).rejects.toThrow(
-      "The request failed. Please try again.",
+  it("calls onError when the HTTP response is not ok", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({ error: { code: "INVALID_REQUEST", message: "Bad input." } }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
+      ),
     );
+
+    const { callbacks, errors } = collectCallbacks();
+    streamChatMessage("", callbacks);
+    await flushPromises();
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("Bad input.");
   });
 
-  it("falls back to a generic message when the error body is null", async () => {
-    mockFetch(503, null);
-    await expect(sendChatMessage("Hello")).rejects.toThrow(
-      "The request failed. Please try again.",
-    );
+  it("calls onError when fetch throws a network error", async () => {
+    vi.mocked(fetch).mockRejectedValue(new TypeError("Failed to fetch"));
+
+    const { callbacks, errors } = collectCallbacks();
+    streamChatMessage("hi", callbacks);
+    await flushPromises();
+
+    expect(errors).toHaveLength(1);
   });
 
-  it("throws when the success response fails Zod validation (empty reply)", async () => {
-    mockFetch(200, { reply: "" });
-    await expect(sendChatMessage("Hello")).rejects.toThrow(
-      "The server returned an unexpected response.",
-    );
+  it("does not call onError when fetch is aborted", async () => {
+    const abortError = new DOMException("Aborted", "AbortError");
+    vi.mocked(fetch).mockRejectedValue(abortError);
+
+    const { callbacks, errors } = collectCallbacks();
+    const controller = new AbortController();
+    controller.abort();
+    streamChatMessage("hi", callbacks, controller.signal);
+    await flushPromises();
+
+    expect(errors).toHaveLength(0);
   });
 
-  it("throws when the success response has the wrong shape", async () => {
-    mockFetch(200, { message: "wrong key" });
-    await expect(sendChatMessage("Hello")).rejects.toThrow(
-      "The server returned an unexpected response.",
+  it("calls onError when the response body is null", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(null, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }),
     );
+
+    const { callbacks, errors } = collectCallbacks();
+    streamChatMessage("hi", callbacks);
+    await flushPromises();
+
+    expect(errors).toHaveLength(1);
   });
 
-  it("throws when the response body is not valid JSON", async () => {
-    mockFetchBadJson(200);
-    await expect(sendChatMessage("Hello")).rejects.toThrow(
-      "The server returned an unexpected response.",
+  it("calls onError when the content-type is not text/event-stream", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      makeResponse('{"unexpected": true}', {
+        status: 200,
+        contentType: "application/json",
+      }),
     );
+
+    const { callbacks, errors } = collectCallbacks();
+    streamChatMessage("hi", callbacks);
+    await flushPromises();
+
+    expect(errors).toHaveLength(1);
   });
 });
 
-// ── AbortSignal ───────────────────────────────────────────────────────────────
+// ── Request payload ───────────────────────────────────────────────────────────
 
-describe("sendChatMessage — abort", () => {
-  afterEach(() => vi.restoreAllMocks());
+describe("streamChatMessage — request", () => {
+  it("sends the message as a JSON POST body", async () => {
+    const body = encodeSSE([sseFrame("done", {})]);
+    vi.mocked(fetch).mockResolvedValue(makeResponse(body));
 
-  it("passes the AbortSignal to fetch", async () => {
-    mockFetch(200, { reply: "OK" });
-    const controller = new AbortController();
-    await sendChatMessage("Hello", controller.signal);
-    const call = vi.mocked(fetch).mock.calls[0];
-    expect(call[1]?.signal).toBe(controller.signal);
-  });
+    const { callbacks } = collectCallbacks();
+    streamChatMessage("find me a laptop", callbacks);
+    await flushPromises();
 
-  it("propagates an AbortError when the request is cancelled", async () => {
-    const controller = new AbortController();
-    global.fetch = vi.fn().mockRejectedValue(
-      new DOMException("Aborted", "AbortError"),
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/api/chat"),
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ message: "find me a laptop" }),
+      }),
     );
-    await expect(
-      sendChatMessage("Hello", controller.signal),
-    ).rejects.toThrow("Aborted");
   });
 });

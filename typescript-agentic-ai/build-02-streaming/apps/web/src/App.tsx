@@ -1,5 +1,5 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import { sendChatMessage } from "./lib/api";
+import { streamChatMessage } from "./lib/api";
 import "./App.css";
 
 type Message = {
@@ -7,6 +7,14 @@ type Message = {
   role: "user" | "assistant";
   content: string;
 };
+
+type ChatState =
+  | { status: "idle" }
+  | { status: "submitting" }
+  | { status: "streaming"; abortController: AbortController }
+  | { status: "completed" }
+  | { status: "error"; message: string }
+  | { status: "cancelled" };
 
 function createMessage(role: Message["role"], content: string): Message {
   return {
@@ -24,43 +32,94 @@ export default function App() {
     ),
   ]);
   const [input, setInput] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [chatState, setChatState] = useState<ChatState>({ status: "idle" });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  // Ref to the in-progress assistant message ID so delta appends can find it
+  const streamingMessageIdRef = useRef<string | null>(null);
+
+  const isActive =
+    chatState.status === "submitting" || chatState.status === "streaming";
+  const error =
+    chatState.status === "error" ? chatState.message : null;
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isLoading]);
+  }, [messages, isActive]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const message = input.trim();
 
-    if (!message || isLoading) {
+    if (!message || isActive) {
       return;
     }
 
     setInput("");
-    setError(null);
-    setIsLoading(true);
+    setChatState({ status: "submitting" });
     setMessages((current) => [...current, createMessage("user", message)]);
 
-    try {
-      const reply = await sendChatMessage(message);
-      setMessages((current) => [
-        ...current,
-        createMessage("assistant", reply),
-      ]);
-    } catch (caughtError) {
-      setError(
-        caughtError instanceof Error
-          ? caughtError.message
-          : "Something went wrong. Please try again.",
-      );
-    } finally {
-      setIsLoading(false);
+    // Create a placeholder assistant message that will grow as deltas arrive
+    const assistantMessageId = crypto.randomUUID();
+    streamingMessageIdRef.current = assistantMessageId;
+    setMessages((current) => [
+      ...current,
+      { id: assistantMessageId, role: "assistant", content: "" },
+    ]);
+
+    const abortController = new AbortController();
+    setChatState({ status: "streaming", abortController });
+
+    streamChatMessage(
+      message,
+      {
+        onDelta(text) {
+          setMessages((current) =>
+            current.map((msg) =>
+              msg.id === assistantMessageId
+                ? { ...msg, content: msg.content + text }
+                : msg,
+            ),
+          );
+          // Transition from submitting to streaming on first delta
+          setChatState((prev) =>
+            prev.status === "submitting"
+              ? { status: "streaming", abortController }
+              : prev,
+          );
+        },
+
+        onDone() {
+          streamingMessageIdRef.current = null;
+          setChatState({ status: "completed" });
+          // Reset to idle after a brief moment so the UI feels snappy
+          setTimeout(() => {
+            setChatState((prev) =>
+              prev.status === "completed" ? { status: "idle" } : prev,
+            );
+          }, 100);
+        },
+
+        onError(message) {
+          streamingMessageIdRef.current = null;
+          setChatState({ status: "error", message });
+        },
+      },
+      abortController.signal,
+    );
+  }
+
+  function handleStop() {
+    if (chatState.status === "streaming") {
+      chatState.abortController.abort();
+      streamingMessageIdRef.current = null;
+      setChatState({ status: "cancelled" });
+      setTimeout(() => {
+        setChatState((prev) =>
+          prev.status === "cancelled" ? { status: "idle" } : prev,
+        );
+      }, 100);
     }
   }
 
@@ -68,6 +127,20 @@ export default function App() {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       event.currentTarget.form?.requestSubmit();
+    }
+  }
+
+  function getStatusLabel(): string {
+    switch (chatState.status) {
+      case "submitting":
+        return "Sending…";
+      case "streaming":
+        return "Generating…";
+      case "completed":
+      case "cancelled":
+      case "idle":
+      case "error":
+        return "Send";
     }
   }
 
@@ -89,7 +162,7 @@ export default function App() {
           className="messages"
           aria-label="Conversation"
           aria-live="polite"
-          aria-busy={isLoading}
+          aria-busy={isActive}
         >
           {messages.map((message) => (
             <article
@@ -99,11 +172,11 @@ export default function App() {
               <span className="message-role">
                 {message.role === "user" ? "You" : "Storefront AI"}
               </span>
-              <p>{message.content}</p>
+              <p>{message.content || <span className="typing-cursor" aria-hidden="true" />}</p>
             </article>
           ))}
 
-          {isLoading && (
+          {chatState.status === "submitting" && (
             <p className="loading" role="status">
               Storefront AI is thinking…
             </p>
@@ -130,14 +203,26 @@ export default function App() {
             placeholder="Ask a shopping question… (Enter to send)"
             rows={2}
             maxLength={4000}
-            disabled={isLoading}
+            disabled={isActive}
           />
-          <button
-            type="submit"
-            disabled={isLoading || input.trim().length === 0}
-          >
-            {isLoading ? "Sending…" : "Send"}
-          </button>
+          <div className="composer-actions">
+            {chatState.status === "streaming" && (
+              <button
+                type="button"
+                className="btn-stop"
+                onClick={handleStop}
+                aria-label="Stop generating"
+              >
+                Stop
+              </button>
+            )}
+            <button
+              type="submit"
+              disabled={isActive || input.trim().length === 0}
+            >
+              {getStatusLabel()}
+            </button>
+          </div>
         </form>
 
         <p className="disclaimer">

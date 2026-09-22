@@ -1,18 +1,34 @@
+/**
+ * POST /api/chat — streaming chat endpoint.
+ *
+ * Request:  { "message": string }   (Zod-validated)
+ * Response: text/event-stream (SSE)
+ *
+ * Pre-stream failures (validation, missing body) return JSON with an HTTP
+ * error code — headers have not been committed yet so a normal error response
+ * is safe.
+ *
+ * Mid-stream failures are forwarded as an SSE `error` event because the HTTP
+ * response headers (200 + SSE content-type) are already on the wire.
+ */
 
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import type { ChatService } from "../services/chat-service.js";
+import type { ChatStreamingService } from "../streaming/chat-streaming-service.js";
+import { formatSseEvent } from "../streaming/sse.js";
 
-const ChatRequestSchema = z.object({
-  message: z
-    .string()
-    .trim()
-    .min(1, "Message cannot be empty.")
-    .max(4000, "Message must be 4000 characters or fewer."),
-}).strict();
+const ChatRequestSchema = z
+  .object({
+    message: z
+      .string()
+      .trim()
+      .min(1, "Message cannot be empty.")
+      .max(4000, "Message must be 4000 characters or fewer."),
+  })
+  .strict();
 
 type ChatRouteOptions = {
-  chatService: ChatService;
+  chatStreamingService: ChatStreamingService;
 };
 
 export async function registerChatRoutes(
@@ -20,6 +36,8 @@ export async function registerChatRoutes(
   options: ChatRouteOptions,
 ): Promise<void> {
   app.post("/api/chat", async (request, reply) => {
+    // ── Validation ────────────────────────────────────────────────────────────
+
     const parsedRequest = ChatRequestSchema.safeParse(request.body);
 
     if (!parsedRequest.success) {
@@ -31,27 +49,98 @@ export async function registerChatRoutes(
       });
     }
 
+    // ── SSE response setup ────────────────────────────────────────────────────
+
+    // Commit SSE headers before writing any body. After this point we cannot
+    // send HTTP status codes — errors go through the SSE error event.
+    reply.raw.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      // Prevents Nginx and other reverse proxies from buffering the stream
+      "X-Accel-Buffering": "no",
+    });
+
+    // Track whether the client closed the connection early
+    let clientClosed = false;
+    reply.raw.on("close", () => {
+      clientClosed = true;
+    });
+
+    // AbortController lets us signal the streaming service when the client
+    // disconnects or the request ends prematurely
+    const abortController = new AbortController();
+    reply.raw.on("close", () => {
+      abortController.abort();
+    });
+
+    // ── Timing for observability ──────────────────────────────────────────────
+
+    const startedAt = Date.now();
+    let firstDeltaAt: number | null = null;
+    let eventCount = 0;
+
+    // ── Stream generation ─────────────────────────────────────────────────────
+
     try {
-      const response = await options.chatService.generateReply(
+      for await (const event of options.chatStreamingService.streamReply(
         parsedRequest.data.message,
-      );
+        abortController.signal,
+      )) {
+        if (clientClosed) {
+          break;
+        }
 
-      return reply.code(200).send({
-        reply: response,
-      });
-    } catch (error) {
-      request.log.error(
-        { err: error },
-        "Chat provider request failed",
-      );
+        if (event.event === "delta") {
+          if (firstDeltaAt === null) {
+            firstDeltaAt = Date.now();
+          }
+          eventCount++;
+        }
 
-      return reply.code(502).send({
-        error: {
-          code: "MODEL_REQUEST_FAILED",
-          message:
-            "The assistant is temporarily unavailable. Please try again.",
-        },
-      });
+        reply.raw.write(formatSseEvent(event));
+
+        // Stop after done or error — do not write further events
+        if (event.event === "done" || event.event === "error") {
+          const outcome = event.event === "done" ? "completed" : "error";
+          const durationMs = Date.now() - startedAt;
+
+          request.log.info(
+            {
+              outcome,
+              durationMs,
+              timeToFirstDeltaMs:
+                firstDeltaAt !== null ? firstDeltaAt - startedAt : null,
+              deltaCount: eventCount,
+            },
+            "Streaming generation finished",
+          );
+
+          break;
+        }
+      }
+    } catch (err) {
+      // This catch block should not be reached because streamReply never
+      // throws — all errors surface as error events. Log if it does.
+      request.log.error({ err }, "Unexpected error during streaming");
+
+      if (!clientClosed) {
+        reply.raw.write(
+          formatSseEvent({
+            event: "error",
+            data: {
+              message:
+                "The assistant is temporarily unavailable. Please try again.",
+            },
+          }),
+        );
+      }
     }
+
+    // End the HTTP response cleanly
+    reply.raw.end();
+
+    // Tell Fastify not to manage the reply — we used reply.raw directly
+    return reply;
   });
 }

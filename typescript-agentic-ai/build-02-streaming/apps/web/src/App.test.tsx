@@ -2,15 +2,16 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
-import { sendChatMessage } from "./lib/api";
+import { streamChatMessage } from "./lib/api";
+import type { StreamCallbacks } from "./lib/api";
 
 // ── Module mock ───────────────────────────────────────────────────────────────
 
 vi.mock("./lib/api", () => ({
-  sendChatMessage: vi.fn(),
+  streamChatMessage: vi.fn(),
 }));
 
-const mockSend = vi.mocked(sendChatMessage);
+const mockStream = vi.mocked(streamChatMessage);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -20,29 +21,38 @@ function setup() {
   return { user };
 }
 
-async function sendMessage(user: ReturnType<typeof userEvent.setup>, text: string) {
+async function typeAndSend(user: ReturnType<typeof userEvent.setup>, text: string) {
   const textarea = screen.getByRole("textbox");
   await user.click(textarea);
   await user.type(textarea, text);
   await user.click(screen.getByRole("button", { name: /send/i }));
 }
 
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
+/**
+ * Capture the callbacks that streamChatMessage was called with so tests
+ * can simulate streaming events.
+ */
+function captureCallbacks(): StreamCallbacks {
+  let captured: StreamCallbacks | null = null;
 
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
+  mockStream.mockImplementation((_msg, callbacks) => {
+    captured = callbacks;
   });
 
-  return { promise, resolve, reject };
+  return new Proxy({} as StreamCallbacks, {
+    get(_, key) {
+      return (...args: unknown[]) => {
+        if (!captured) throw new Error("streamChatMessage not yet called");
+        return (captured[key as keyof StreamCallbacks] as (...a: unknown[]) => void)(...args);
+      };
+    },
+  });
 }
 
 // ── Initial render ────────────────────────────────────────────────────────────
 
 describe("App — initial render", () => {
-  beforeEach(() => mockSend.mockReset());
+  beforeEach(() => mockStream.mockReset());
 
   it("displays the welcome message from the assistant", () => {
     setup();
@@ -63,21 +73,26 @@ describe("App — initial render", () => {
 // ── Sending a message ─────────────────────────────────────────────────────────
 
 describe("App — sending a message", () => {
-  beforeEach(() => mockSend.mockReset());
+  beforeEach(() => mockStream.mockReset());
 
   it("appends the user message to the conversation", async () => {
-    mockSend.mockResolvedValue("Noted.");
+    mockStream.mockImplementation(() => { /* no-op */ });
     const { user } = setup();
-    await sendMessage(user, "What headphones do you recommend?");
+    await typeAndSend(user, "What headphones do you recommend?");
     expect(
       screen.getByText("What headphones do you recommend?"),
     ).toBeInTheDocument();
   });
 
-  it("appends the assistant reply to the conversation", async () => {
-    mockSend.mockResolvedValue("I recommend the Sony WH-1000XM5.");
+  it("appends streamed delta text to the assistant message", async () => {
+    const callbacks = captureCallbacks();
     const { user } = setup();
-    await sendMessage(user, "Recommend headphones");
+    await typeAndSend(user, "Recommend headphones");
+
+    callbacks.onDelta("I recommend ");
+    callbacks.onDelta("the Sony WH-1000XM5.");
+    callbacks.onDone();
+
     await waitFor(() =>
       expect(
         screen.getByText("I recommend the Sony WH-1000XM5."),
@@ -86,82 +101,109 @@ describe("App — sending a message", () => {
   });
 
   it("clears the input after sending", async () => {
-    mockSend.mockResolvedValue("OK");
+    mockStream.mockImplementation(() => { /* no-op */ });
     const { user } = setup();
     const textarea = screen.getByRole<HTMLTextAreaElement>("textbox");
     await user.click(textarea);
     await user.type(textarea, "Hello");
     await user.click(screen.getByRole("button", { name: /send/i }));
-    await waitFor(() => expect(textarea.value).toBe(""));
+    expect(textarea.value).toBe("");
   });
 
   it("sends the message when Enter is pressed", async () => {
-    mockSend.mockResolvedValue("Roger that.");
+    mockStream.mockImplementation(() => { /* no-op */ });
     const { user } = setup();
     const textarea = screen.getByRole("textbox");
     await user.click(textarea);
     await user.type(textarea, "Hello{Enter}");
-    expect(mockSend).toHaveBeenCalledWith("Hello");
+    expect(mockStream).toHaveBeenCalledWith(
+      "Hello",
+      expect.any(Object),
+      expect.any(AbortSignal),
+    );
   });
 
   it("does not send when Shift+Enter is pressed", async () => {
-    mockSend.mockResolvedValue("Roger that.");
+    mockStream.mockImplementation(() => { /* no-op */ });
     const { user } = setup();
     const textarea = screen.getByRole("textbox");
     await user.click(textarea);
     await user.type(textarea, "Hello{Shift>}{Enter}{/Shift}");
-    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockStream).not.toHaveBeenCalled();
   });
 });
 
-// ── Loading state ─────────────────────────────────────────────────────────────
+// ── Loading / streaming state ─────────────────────────────────────────────────
 
-describe("App — loading state", () => {
-  beforeEach(() => mockSend.mockReset());
+describe("App — streaming state", () => {
+  beforeEach(() => mockStream.mockReset());
 
-  it("shows the loading indicator while awaiting a reply", async () => {
-    const deferred = createDeferred<string>();
-    mockSend.mockReturnValue(deferred.promise);
+  it("shows the thinking indicator while submitting", async () => {
+    mockStream.mockImplementation(() => { /* no-op */ });
     const { user } = setup();
-    await sendMessage(user, "Hello");
+    await typeAndSend(user, "Hello");
     expect(screen.getByRole("status")).toHaveTextContent(/thinking/i);
-    deferred.resolve("Here you go.");
   });
 
-  it("disables the send button while loading", async () => {
-    const deferred = createDeferred<string>();
-    mockSend.mockReturnValue(deferred.promise);
+  it("disables the send button while streaming", async () => {
+    mockStream.mockImplementation(() => { /* no-op */ });
     const { user } = setup();
-    await sendMessage(user, "Hello");
-    expect(screen.getByRole("button", { name: /sending/i })).toBeDisabled();
-    deferred.resolve("Here you go.");
+    await typeAndSend(user, "Hello");
+    // The button text changes while active
+    expect(
+      screen.getByRole("button", { name: /sending|generating/i }),
+    ).toBeDisabled();
   });
 
-  it("hides the loading indicator after the reply arrives", async () => {
-    mockSend.mockResolvedValue("Here you go.");
+  it("hides the loading indicator after done event", async () => {
+    const callbacks = captureCallbacks();
     const { user } = setup();
-    await sendMessage(user, "Hello");
+    await typeAndSend(user, "Hello");
+    callbacks.onDone();
     await waitFor(() =>
       expect(screen.queryByRole("status")).not.toBeInTheDocument(),
     );
+  });
+
+  it("prevents duplicate submission while streaming", async () => {
+    mockStream.mockImplementation(() => { /* no-op */ });
+    const { user } = setup();
+    await typeAndSend(user, "First message");
+    // Try to submit again — input is disabled so second send should be blocked
+    const textarea = screen.getByRole("textbox");
+    expect(textarea).toBeDisabled();
+    expect(mockStream).toHaveBeenCalledTimes(1);
   });
 });
 
 // ── Error handling ────────────────────────────────────────────────────────────
 
 describe("App — error handling", () => {
-  beforeEach(() => mockSend.mockReset());
+  beforeEach(() => mockStream.mockReset());
+
+  it("displays an error when the stream emits an error event", async () => {
+    const callbacks = captureCallbacks();
+    const { user } = setup();
+    await typeAndSend(user, "Hello");
+    callbacks.onError("The assistant is temporarily unavailable.");
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        /temporarily unavailable/i,
+      ),
+    );
+  });
 
   it("clears the error on a subsequent successful send", async () => {
-    mockSend
-      .mockRejectedValueOnce(new Error("Unavailable."))
-      .mockResolvedValueOnce("Back online.");
+    const callbacks = captureCallbacks();
     const { user } = setup();
-    await sendMessage(user, "First");
+
+    // First message errors
+    await typeAndSend(user, "First");
+    callbacks.onError("Unavailable.");
     await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
-    await sendMessage(user, "Second");
-    await waitFor(() =>
-      expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
-    );
+
+    // Second message succeeds
+    await typeAndSend(user, "Second");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

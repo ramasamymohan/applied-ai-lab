@@ -1,17 +1,17 @@
 
 import { buildApp } from "./app.js";
 import { config } from "./config.js";
-import { createChatService } from "./services/chat-service.js";
+import { createChatStreamingService } from "./streaming/chat-streaming-service.js";
 
 async function main(): Promise<void> {
-  const chatService = createChatService({
+  const chatStreamingService = createChatStreamingService({
     apiKey: config.OPENAI_API_KEY,
     model: config.OPENAI_MODEL,
   });
 
   const app = await buildApp({
     webOrigin: config.WEB_ORIGIN,
-    chatService,
+    chatStreamingService,
   });
 
   try {

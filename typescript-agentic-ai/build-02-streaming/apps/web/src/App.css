@@ -127,6 +127,23 @@
   text-align: right;
 }
 
+/* ── Streaming cursor ───────────────────────────────── */
+
+.typing-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: currentColor;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: blink 1s step-end infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
 /* ── Loading indicator ──────────────────────────────── */
 
 .loading {
@@ -185,6 +202,14 @@
   border-color: var(--color-brand);
 }
 
+/* ── Composer actions (send + stop) ─────────────────── */
+
+.composer-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .composer button {
   min-height: 42px;
   padding: 0 18px;
@@ -213,6 +238,19 @@
 .composer textarea:focus-visible {
   outline: 3px solid var(--color-brand);
   outline-offset: 2px;
+}
+
+/* Stop button — secondary style */
+.btn-stop {
+  background: var(--color-surface-muted) !important;
+  color: var(--color-text) !important;
+  border: 1px solid var(--color-border) !important;
+  font-size: 0.85rem !important;
+  min-height: 34px !important;
+}
+
+.btn-stop:hover:not(:disabled) {
+  background: var(--color-border) !important;
 }
 
 /* ── Disclaimer ─────────────────────────────────────── */
