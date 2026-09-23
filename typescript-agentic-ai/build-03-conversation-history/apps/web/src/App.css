@@ -1,0 +1,310 @@
+.page {
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--color-bg);
+}
+
+/* ── Chat shell ─────────────────────────────────────── */
+
+.chat {
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 760px);
+  height: min(84vh, 820px);
+  min-height: 500px;
+  overflow: hidden;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 20px;
+  box-shadow: var(--shadow-chat);
+}
+
+/* ── Header ─────────────────────────────────────────── */
+
+.chat-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.brand-mark {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--color-brand);
+  color: var(--color-brand-text);
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+
+.chat-header h1 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.chat-header p {
+  margin: 2px 0 0;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.status {
+  margin-left: auto;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+/* ── Messages ───────────────────────────────────────── */
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+}
+
+.message {
+  max-width: 82%;
+  margin-bottom: 16px;
+  padding: 10px 14px 12px;
+  border-radius: 16px;
+  overflow-wrap: anywhere;
+}
+
+.message:last-child {
+  margin-bottom: 0;
+}
+
+.message-role {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+  opacity: 0.7;
+}
+
+.message p {
+  font-size: 0.95rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.message--assistant {
+  align-self: flex-start;
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+  border-bottom-left-radius: 4px;
+}
+
+.message--user {
+  align-self: flex-end;
+  background: var(--color-brand);
+  color: var(--color-brand-text);
+  border-bottom-right-radius: 4px;
+}
+
+.message--user .message-role {
+  text-align: right;
+}
+
+/* ── Streaming cursor ───────────────────────────────── */
+
+.typing-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: currentColor;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: blink 1s step-end infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+/* ── Loading indicator ──────────────────────────────── */
+
+.loading {
+  align-self: flex-start;
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  background: var(--color-surface-muted);
+  border-radius: 16px;
+  border-bottom-left-radius: 4px;
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+}
+
+/* ── Error banner ───────────────────────────────────── */
+
+.error {
+  margin: 0 24px 12px;
+  padding: 10px 14px;
+  background: var(--color-error-bg);
+  border-radius: 8px;
+  color: var(--color-error);
+  font-size: 0.875rem;
+}
+
+/* ── Composer ───────────────────────────────────────── */
+
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 14px 24px 16px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.composer textarea {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  padding: 10px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.95rem;
+  background: var(--color-surface-muted);
+  transition: border-color 0.15s;
+}
+
+.composer textarea::placeholder {
+  color: var(--color-text-muted);
+}
+
+.composer textarea:focus {
+  outline: none;
+  border-color: var(--color-brand);
+}
+
+/* ── Composer actions (send + stop) ─────────────────── */
+
+.composer-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.composer button {
+  min-height: 42px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--color-brand);
+  color: var(--color-brand-text);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.composer button:hover:not(:disabled) {
+  background: var(--color-brand-dark);
+}
+
+.composer button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.composer button:focus-visible,
+.composer textarea:focus-visible {
+  outline: 3px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+/* Stop button — secondary style */
+.btn-stop {
+  background: var(--color-surface-muted) !important;
+  color: var(--color-text) !important;
+  border: 1px solid var(--color-border) !important;
+  font-size: 0.85rem !important;
+  min-height: 34px !important;
+}
+
+.btn-stop:hover:not(:disabled) {
+  background: var(--color-border) !important;
+}
+
+/* ── Disclaimer ─────────────────────────────────────── */
+
+.disclaimer {
+  padding: 0 24px 14px;
+  font-size: 0.76rem;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+/* ── Accessibility ──────────────────────────────────── */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── Mobile ─────────────────────────────────────────── */
+
+@media (max-width: 600px) {
+  .page {
+    padding: 0;
+  }
+
+  .chat {
+    width: 100%;
+    height: 100dvh;
+    min-height: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .messages {
+    padding: 16px;
+  }
+
+  .composer {
+    padding: 10px 16px 14px;
+  }
+
+  .error {
+    margin: 0 16px 10px;
+  }
+
+  .disclaimer {
+    padding: 0 16px 12px;
+  }
+}
