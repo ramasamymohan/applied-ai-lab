@@ -3,12 +3,16 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import { databasePlugin } from "./db/pool.js";
-import { registerChatRoutes } from "./routes/chat.js";
+import { createConversationRepository } from "./repositories/conversation-repository.js";
+import { createMessageRepository } from "./repositories/message-repository.js";
+import { createConversationService } from "./services/conversation-service.js";
+import { registerConversationRoutes } from "./routes/conversation-routes.js";
 import type { ChatStreamingService } from "./streaming/chat-streaming-service.js";
 
 type BuildAppOptions = {
   webOrigin: string;
   databaseUrl: string;
+  maxContextTurns: number;
   chatStreamingService: ChatStreamingService;
 };
 
@@ -36,8 +40,20 @@ export async function buildApp(options: BuildAppOptions) {
     status: "ok",
   }));
 
-  await registerChatRoutes(app, {
+  // ── Wire up conversation service and routes ────────────────────────────
+
+  const conversationRepository = createConversationRepository(app.pg);
+  const messageRepository = createMessageRepository(app.pg);
+
+  const conversationService = createConversationService({
+    conversationRepository,
+    messageRepository,
     chatStreamingService: options.chatStreamingService,
+    maxContextTurns: options.maxContextTurns,
+  });
+
+  await registerConversationRoutes(app, {
+    conversationService,
   });
 
   return app;

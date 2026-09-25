@@ -13,6 +13,7 @@ async function main(): Promise<void> {
   const app = await buildApp({
     webOrigin: config.WEB_ORIGIN,
     databaseUrl: config.DATABASE_URL,
+    maxContextTurns: config.MAX_CONTEXT_TURNS,
     chatStreamingService,
   });
 

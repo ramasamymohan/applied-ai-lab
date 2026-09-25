@@ -22,24 +22,23 @@ Build 03 introduces application-managed conversation state using PostgreSQL. Use
 | Conversation identity | None | UUID per conversation |
 | Message lifecycle | None | streaming → completed / failed / cancelled / interrupted |
 | Recovery | None | Startup marks abandoned streaming as interrupted |
+| API surface | POST /api/chat | Conversation CRUD + message streaming |
 
 Build 02 is unchanged and still independently runnable.
 
 ---
 
-## Current status — Commit 01
+## Current status — Commit 02
 
-Commit 01 establishes the PostgreSQL persistence foundation:
+Commit 02 connects the persistence layer to the API:
 
-- Database schema (conversations, messages tables)
-- SQL migration
-- Connection pool as a Fastify plugin
-- Conversation and message repositories
-- Transactional turn creation
-- Startup recovery for abandoned streaming messages
-- Database constraints protecting conversation and generation invariants
+- Conversation CRUD endpoints (create, list, get with messages)
+- Persistent streaming — assistant messages are finalized in the database when the stream completes, fails, or is cancelled
+- Context-aware model calls — recent completed turns are included as conversation history
+- Conversation service orchestrating repositories and streaming
+- Updated SSE contract — done events carry conversationId and messageId
 
-The conversation APIs and React conversation experience are not yet implemented.
+The React conversation experience is not yet implemented — the frontend still uses the Build 02 single-chat interface.
 
 ---
 
@@ -62,8 +61,6 @@ Fastify API
   │     │
   │     ├── Message repository
   │     │
-  │     ├── Context builder
-  │     │
   │     └── OpenAI streaming service
   │
   ├── PostgreSQL
@@ -78,6 +75,55 @@ Fastify API
 ```
 
 PostgreSQL is the source of truth for conversation history. The model does not own the application's persistent state.
+
+---
+
+## API endpoints
+
+### POST /api/conversations
+
+Create a new conversation and stream the first assistant reply.
+
+**Request:** `{ "message": "string" }`
+
+**Response:** SSE stream (same wire format as the message endpoint below).
+
+The conversation title is derived from the first user message.
+
+### GET /api/conversations
+
+List conversations, most recently updated first.
+
+**Response:** `{ "conversations": [{ "id", "title", "created_at", "updated_at" }] }`
+
+### GET /api/conversations/:conversationId
+
+Get a conversation with all its messages.
+
+**Response:** `{ "conversation": { "id", "title", "created_at", "updated_at", "messages": [...] } }`
+
+### POST /api/conversations/:conversationId/messages
+
+Send a message in an existing conversation and stream the assistant reply.
+
+**Request:** `{ "message": "string" }`
+
+**Response:** SSE stream with events:
+
+| Event | Data | Description |
+|---|---|---|
+| `delta` | `{ "text": "..." }` | Generated text fragment |
+| `done` | `{ "conversationId": "...", "messageId": "..." }` | Successful completion |
+| `error` | `{ "message": "..." }` | Generation failure |
+
+**Error responses (pre-stream):**
+
+| Code | Condition |
+|---|---|
+| 400 | Invalid request body or conversation ID |
+| 404 | Conversation not found |
+| 409 | Another response is already being generated |
+| 500 | Internal error |
 
 ---
 
@@ -235,7 +281,6 @@ Limitations:
 
 ## Known limitations
 
-- No conversation APIs yet (Commit 02).
 - No React conversation experience yet (Commit 03).
 - No user authentication or conversation ownership.
 - No token-aware context budgeting — uses a turn-count limit.
@@ -250,6 +295,4 @@ This build is not production-ready. These limitations are addressed in later bui
 
 ## Next steps
 
-Commit 02 connects the persistence layer to Fastify routes and the OpenAI streaming service, adding conversation CRUD endpoints and contextual streaming.
-
-Commit 03 adds the React conversation experience.
+Commit 03 adds the React conversation experience — conversation list sidebar, persistent chat with history, and conversation switching.

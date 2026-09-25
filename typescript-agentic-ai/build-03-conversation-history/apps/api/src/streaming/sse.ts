@@ -1,10 +1,12 @@
 /**
- * SSE event contract for Build 02 streaming.
+ * SSE event contract for Build 03 streaming.
  *
- * Three application-level event types are used:
+ * Four application-level event types are used:
  *
  *   delta  — Carries newly generated text. Zero or more per stream.
  *   done   — Marks successful completion. Exactly one, after all deltas.
+ *            Carries conversation and message identifiers so the client
+ *            can track which conversation was created or continued.
  *   error  — Carries a safe user-facing error message. Sent when
  *            generation fails after streaming has already begun.
  *
@@ -28,7 +30,10 @@ export type DeltaEvent = {
 
 export type DoneEvent = {
   event: "done";
-  data: Record<string, never>;
+  data: {
+    conversationId: string;
+    messageId: string;
+  };
 };
 
 export type ErrorEvent = {
@@ -59,8 +64,11 @@ export function deltaEvent(text: string): DeltaEvent {
   return { event: "delta", data: { text } };
 }
 
-export function doneEvent(): DoneEvent {
-  return { event: "done", data: {} };
+export function doneEvent(
+  conversationId: string,
+  messageId: string,
+): DoneEvent {
+  return { event: "done", data: { conversationId, messageId } };
 }
 
 export function errorEvent(message: string): ErrorEvent {

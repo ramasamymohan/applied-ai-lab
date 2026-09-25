@@ -1,14 +1,18 @@
 /**
- * OpenAI Responses API streaming service for Build 02.
+ * OpenAI Responses API streaming service for Build 03.
  *
  * Consumes provider streaming events and translates them into application-level
  * StreamEvents (delta | done | error). Provider-specific event details stay
  * isolated here and never leak into the route handler.
  *
+ * Build 03 change: streamReply now accepts an array of context messages so the
+ * model receives conversation history. The conversation and message IDs are
+ * passed through to the done event.
+ *
  * Usage:
  *
  *   const service = createChatStreamingService({ apiKey, model });
- *   for await (const event of service.streamReply(message, signal)) {
+ *   for await (const event of service.streamReply({ ... })) {
  *     // event is DeltaEvent | DoneEvent | ErrorEvent
  *   }
  */
@@ -21,11 +25,33 @@ import {
   type StreamEvent,
 } from "./sse.js";
 
+// ── Types ────────────────────────────────────────────────────────────────────
+
+/** A message in the conversation context sent to the model. */
+export type ContextMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+export type StreamReplyOptions = {
+  /** The user's current message. */
+  message: string;
+  /** Prior conversation turns to include as context. */
+  contextMessages: ContextMessage[];
+  /** Conversation ID — passed through to the done event. */
+  conversationId: string;
+  /** Assistant message ID — passed through to the done event. */
+  messageId: string;
+  /** Optional abort signal for cancellation. */
+  signal?: AbortSignal;
+};
+
 // ── Service interface ─────────────────────────────────────────────────────────
 
 export type ChatStreamingService = {
   /**
-   * Returns an async iterable of StreamEvents for the given message.
+   * Returns an async iterable of StreamEvents for the given message
+   * and conversation context.
    *
    * Yields zero or more delta events followed by a done event on success.
    * Yields an error event as the final item on failure.
@@ -33,10 +59,7 @@ export type ChatStreamingService = {
    * Never throws — all errors are surfaced as error events so the caller can
    * forward them directly to the SSE response without an extra try/catch.
    */
-  streamReply(
-    message: string,
-    signal?: AbortSignal,
-  ): AsyncIterable<StreamEvent>;
+  streamReply(options: StreamReplyOptions): AsyncIterable<StreamEvent>;
 };
 
 type CreateChatStreamingServiceOptions = {
@@ -61,6 +84,28 @@ Be concise, friendly, and transparent about uncertainty.
 
 // ── Implementation ────────────────────────────────────────────────────────────
 
+/**
+ * Build the input array for the OpenAI Responses API.
+ *
+ * The Responses API accepts an `input` parameter that can be a string or
+ * an array of message objects. For multi-turn context we pass the array form:
+ * prior turns as {role, content} objects, followed by the current user message.
+ */
+function buildInput(
+  contextMessages: ContextMessage[],
+  currentMessage: string,
+): Array<{ role: "user" | "assistant"; content: string }> {
+  const input: Array<{ role: "user" | "assistant"; content: string }> = [];
+
+  for (const msg of contextMessages) {
+    input.push({ role: msg.role, content: msg.content });
+  }
+
+  input.push({ role: "user", content: currentMessage });
+
+  return input;
+}
+
 export function createChatStreamingService(
   options: CreateChatStreamingServiceOptions,
 ): ChatStreamingService {
@@ -72,18 +117,22 @@ export function createChatStreamingService(
 
   return {
     async *streamReply(
-      message: string,
-      signal?: AbortSignal,
+      streamOptions: StreamReplyOptions,
     ): AsyncIterable<StreamEvent> {
+      const { message, contextMessages, conversationId, messageId, signal } =
+        streamOptions;
+
       let stream: Awaited<ReturnType<typeof client.responses.stream>> | null =
         null;
 
       try {
+        const input = buildInput(contextMessages, message);
+
         stream = await client.responses.stream(
           {
             model: options.model,
             instructions: SYSTEM_INSTRUCTIONS,
-            input: message,
+            input,
           },
           { signal },
         );
@@ -105,7 +154,7 @@ export function createChatStreamingService(
 
           // response.completed signals successful end of generation
           if (event.type === "response.completed") {
-            yield doneEvent();
+            yield doneEvent(conversationId, messageId);
             return;
           }
 
