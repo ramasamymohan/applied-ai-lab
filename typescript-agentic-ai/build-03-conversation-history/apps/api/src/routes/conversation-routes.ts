@@ -202,6 +202,21 @@ async function streamMessageReply(
   conversationId: string,
   message: string,
 ): Promise<FastifyReply> {
+  // ── Client disconnect → cancel upstream generation ────────────────────
+  // Registered before the turn is created so a disconnect at any point
+  // aborts the provider request. `writableFinished` distinguishes a normal
+  // close after reply.end() from a premature client disconnect.
+
+  const abortController = new AbortController();
+  let clientClosed = false;
+
+  reply.raw.on("close", () => {
+    if (!reply.raw.writableFinished) {
+      clientClosed = true;
+      abortController.abort();
+    }
+  });
+
   // ── Create the turn (pre-stream — can return HTTP errors) ─────────────
 
   let sendResult;
@@ -209,6 +224,7 @@ async function streamMessageReply(
     sendResult = await conversationService.sendMessage(
       conversationId,
       message,
+      abortController.signal,
     );
   } catch (err) {
     if (err instanceof ConversationNotFoundError) {
@@ -241,16 +257,18 @@ async function streamMessageReply(
 
   // ── SSE response setup ────────────────────────────────────────────────
 
+  // Writing headers through reply.raw bypasses Fastify's header handling, so
+  // headers set by plugins (notably CORS) are merged in explicitly.
+  // X-Conversation-Id lets the browser learn the ID of a newly created
+  // conversation before any text arrives, even if the stream later fails
+  // or is stopped.
   reply.raw.writeHead(200, {
+    ...reply.getHeaders(),
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache, no-transform",
     Connection: "keep-alive",
     "X-Accel-Buffering": "no",
-  });
-
-  let clientClosed = false;
-  reply.raw.on("close", () => {
-    clientClosed = true;
+    "X-Conversation-Id": conversationId,
   });
 
   // ── Timing for observability ──────────────────────────────────────────

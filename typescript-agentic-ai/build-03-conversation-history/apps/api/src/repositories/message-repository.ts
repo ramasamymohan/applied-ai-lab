@@ -159,12 +159,15 @@ export function createMessageRepository(pool: Pool): MessageRepository {
       }
     },
 
+    // A turn's user and assistant rows are inserted in one transaction, so
+    // they share the same created_at (now() is the transaction start time).
+    // The role tie-breaker keeps the user message ahead of its reply.
     async findByConversationId(conversationId: string): Promise<MessageRow[]> {
       const result = await pool.query<MessageRow>(
         `SELECT id, conversation_id, turn_id, role, content, status, created_at, updated_at
          FROM messages
          WHERE conversation_id = $1
-         ORDER BY created_at ASC`,
+         ORDER BY created_at ASC, (role = 'assistant') ASC`,
         [conversationId],
       );
       return result.rows;
@@ -194,7 +197,7 @@ export function createMessageRepository(pool: Pool): MessageRepository {
                 m.status, m.created_at, m.updated_at
          FROM messages m
          INNER JOIN completed_turns ct ON m.turn_id = ct.turn_id
-         ORDER BY m.created_at ASC`,
+         ORDER BY m.created_at ASC, (m.role = 'assistant') ASC`,
         [conversationId, maxTurns, excludeTurnId],
       );
       return result.rows;

@@ -28,17 +28,38 @@ Build 02 is unchanged and still independently runnable.
 
 ---
 
-## Current status — Commit 02
+## Current status — Commit 03 (build complete)
 
-Commit 02 connects the persistence layer to the API:
+The build is implemented across three commits:
 
-- Conversation CRUD endpoints (create, list, get with messages)
-- Persistent streaming — assistant messages are finalized in the database when the stream completes, fails, or is cancelled
-- Context-aware model calls — recent completed turns are included as conversation history
-- Conversation service orchestrating repositories and streaming
-- Updated SSE contract — done events carry conversationId and messageId
+1. **PostgreSQL foundation** — schema, migrations, repositories, pool lifecycle, startup recovery.
+2. **Conversation APIs and persistent streaming** — conversation endpoints, context-aware model calls, assistant messages finalized in the database.
+3. **React conversation experience** — conversation sidebar, history reload after refresh, continuing a conversation, and stop/error handling that reconciles with the database.
 
-The React conversation experience is not yet implemented — the frontend still uses the Build 02 single-chat interface.
+### Frontend structure
+
+```
+apps/web/src
+├── App.tsx                         layout: sidebar + chat
+├── hooks/useChat.ts                conversation state, streaming, reconciliation
+├── components/
+│   ├── ConversationSidebar.tsx     list, select, new conversation
+│   ├── MessageList.tsx             messages, status notes, empty/loading/error states
+│   └── Composer.tsx                input, send, stop
+└── lib/
+    ├── api.ts                      JSON reads (Zod-validated) + SSE streaming client
+    └── sse-parser.ts               incremental SSE parsing
+```
+
+The database is the source of truth. While a reply streams, the UI shows optimistic local messages. When the stream ends — completed, failed, or stopped — the conversation is re-read from the API so the view matches what was persisted.
+
+Behavior to know about:
+
+- **New conversations:** `POST /api/conversations` creates the conversation and streams the first reply. The new conversation's ID is returned in the `X-Conversation-Id` response header (exposed through CORS), so the UI knows it before any text arrives — even if the stream fails or is stopped.
+- **Stop:** aborting the request makes the server cancel the provider call and finalize the message as `cancelled`, keeping the partial text.
+- **Switching conversations** and starting a new one are disabled while a reply is generating.
+- **Pre-stream failures** (validation, not found, 409 concurrent generation, rate limit) remove the optimistic messages and restore the draft in the input.
+- **Mid-stream failures** keep the partial text, mark the message as failed, and show the error.
 
 ---
 
@@ -86,7 +107,7 @@ Create a new conversation and stream the first assistant reply.
 
 **Request:** `{ "message": "string" }`
 
-**Response:** SSE stream (same wire format as the message endpoint below).
+**Response:** SSE stream (same wire format as the message endpoint below), with an `X-Conversation-Id` response header carrying the new conversation's ID.
 
 The conversation title is derived from the first user message.
 
@@ -113,8 +134,10 @@ Send a message in an existing conversation and stream the assistant reply.
 | Event | Data | Description |
 |---|---|---|
 | `delta` | `{ "text": "..." }` | Generated text fragment |
-| `done` | `{ "conversationId": "...", "messageId": "..." }` | Successful completion |
-| `error` | `{ "message": "..." }` | Generation failure |
+| `done` | `{ "conversationId": "...", "messageId": "..." }` | Successful completion. The message is already persisted as `completed` when this is sent. |
+| `error` | `{ "message": "..." }` | Generation failure. The message is already persisted as `failed`. |
+
+If the client disconnects mid-stream, the provider request is aborted and the message is persisted as `cancelled` with the partial text.
 
 **Error responses (pre-stream):**
 
@@ -260,10 +283,8 @@ pnpm migrate:down # rollback migrations
 ```bash
 cd apps/web
 pnpm dev          # Vite dev server
-pnpm typecheck    # tsc --noEmit
-pnpm test         # Vitest
 pnpm lint         # oxlint
-pnpm build        # Vite production build → dist/
+pnpm build        # tsc -b (typecheck) + Vite production build → dist/
 ```
 
 ---
@@ -281,8 +302,11 @@ Limitations:
 
 ## Known limitations
 
-- No React conversation experience yet (Commit 03).
-- No user authentication or conversation ownership.
+- No user authentication or conversation ownership — every browser sees every conversation.
+- No resuming or re-attaching to a reply that is still generating; a reply cut off by a closed tab is stored as `cancelled`.
+- Conversation switching is blocked while a reply generates (no concurrent per-conversation streams in the UI).
+- Message and conversation lists are not paginated.
+- Build 03 adds no automated tests (out of scope for this build). Test files inherited from Build 02 (`apps/api/test/*`, `apps/web/src/App.test.tsx`, `apps/web/src/lib/api.test.ts`) target the Build 02 contracts and are not maintained here.
 - No token-aware context budgeting — uses a turn-count limit.
 - No automatic conversation summarization.
 - No RAG or product knowledge retrieval.
@@ -295,4 +319,4 @@ This build is not production-ready. These limitations are addressed in later bui
 
 ## Next steps
 
-Commit 03 adds the React conversation experience — conversation list sidebar, persistent chat with history, and conversation switching.
+The next constraint this build exposes: conversation history grows without bound, and a turn-count limit is a blunt way to fit it into the model's context window. Token-aware context budgeting and summarization are left to a later build.

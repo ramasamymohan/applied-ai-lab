@@ -8,10 +8,10 @@
 
 /* ── Chat shell ─────────────────────────────────────── */
 
-.chat {
+.workspace {
+  position: relative;
   display: flex;
-  flex-direction: column;
-  width: min(100%, 760px);
+  width: min(100%, 1080px);
   height: min(84vh, 820px);
   min-height: 500px;
   overflow: hidden;
@@ -19,6 +19,139 @@
   border: 1px solid var(--color-border);
   border-radius: 20px;
   box-shadow: var(--shadow-chat);
+}
+
+.chat {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--color-surface);
+}
+
+/* ── Sidebar ────────────────────────────────────────── */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 280px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  background: var(--color-surface-muted);
+  border-right: 1px solid var(--color-border);
+}
+
+.sidebar-header {
+  display: flex;
+  gap: 8px;
+  padding: 14px;
+}
+
+.btn-new {
+  flex: 1;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--color-brand);
+  color: var(--color-brand-text);
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-new:hover:not(:disabled) {
+  background: var(--color-brand-dark);
+}
+
+.btn-new:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.btn-close-sidebar,
+.btn-menu {
+  display: none;
+  min-width: 40px;
+  min-height: 40px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+
+.sidebar-note {
+  padding: 4px 16px 10px;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.sidebar-note--error {
+  color: var(--color-error);
+}
+
+.conversation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0 8px 12px;
+  list-style: none;
+}
+
+.conversation-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.conversation-item:hover:not(:disabled) {
+  background: var(--color-border);
+}
+
+.conversation-item--active {
+  background: var(--color-surface);
+  box-shadow: inset 3px 0 0 var(--color-brand);
+}
+
+.conversation-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.conversation-item:focus-visible,
+.btn-new:focus-visible,
+.btn-menu:focus-visible,
+.btn-close-sidebar:focus-visible {
+  outline: 3px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+.conversation-title {
+  overflow: hidden;
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-time {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
 }
 
 /* ── Header ─────────────────────────────────────────── */
@@ -53,10 +186,18 @@
   color: var(--color-text);
 }
 
+.chat-heading {
+  min-width: 0;
+}
+
 .chat-header p {
+  max-width: 100%;
   margin: 2px 0 0;
+  overflow: hidden;
   font-size: 0.8rem;
   color: var(--color-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status {
@@ -125,6 +266,51 @@
 
 .message--user .message-role {
   text-align: right;
+}
+
+.message-note {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.75rem;
+  font-style: italic;
+  opacity: 0.75;
+}
+
+/* ── Empty state and load error ─────────────────────── */
+
+.empty-state {
+  margin: auto;
+  max-width: 420px;
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+.empty-state h2 {
+  margin: 0 0 8px;
+  color: var(--color-text);
+  font-size: 1.15rem;
+}
+
+.empty-state p {
+  font-size: 0.92rem;
+  line-height: 1.6;
+}
+
+.load-error {
+  align-self: flex-start;
+  margin-bottom: 16px;
+}
+
+.load-error button {
+  min-height: 36px;
+  padding: 0 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
 }
 
 /* ── Streaming cursor ───────────────────────────────── */
@@ -283,13 +469,46 @@
     padding: 0;
   }
 
-  .chat {
+  .workspace {
     width: 100%;
     height: 100dvh;
     min-height: 0;
     border: 0;
     border-radius: 0;
     box-shadow: none;
+  }
+
+  /* Sidebar becomes an overlay opened from the header menu button. */
+  .sidebar {
+    position: absolute;
+    inset: 0 auto 0 0;
+    z-index: 10;
+    width: min(85%, 320px);
+    transform: translateX(-100%);
+    visibility: hidden; /* keeps the closed overlay out of the tab order */
+    transition: transform 0.2s ease, visibility 0.2s;
+    box-shadow: var(--shadow-chat);
+  }
+
+  .sidebar--open {
+    transform: translateX(0);
+    visibility: visible;
+  }
+
+  .btn-menu,
+  .btn-close-sidebar {
+    display: inline-grid;
+    place-items: center;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sidebar {
+      transition: none;
+    }
+  }
+
+  .chat-header {
+    padding: 14px 16px;
   }
 
   .messages {

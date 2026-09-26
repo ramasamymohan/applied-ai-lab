@@ -1,5 +1,5 @@
 /**
- * SSE stream parser for Build 02.
+ * SSE stream parser for Build 03.
  *
  * Converts raw response chunks from fetch() into application-level events.
  * Handles all the tricky cases:
@@ -27,7 +27,7 @@ export type SseDeltaEvent = {
 
 export type SseDoneEvent = {
   event: "done";
-  data: Record<string, never>;
+  data: { conversationId: string; messageId: string };
 };
 
 export type SseErrorEvent = {
@@ -141,7 +141,27 @@ export function createSseParser(onEvent: (event: SseEvent) => void): SseParser {
     }
 
     if (eventName === "done") {
-      onEvent({ event: "done", data: {} });
+      // A done event without both IDs is malformed. Ignoring it means the
+      // stream ends without a terminal event, which the API client reports
+      // as an interrupted connection rather than a silent success.
+      if (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        "conversationId" in parsed &&
+        typeof (parsed as { conversationId: unknown }).conversationId ===
+          "string" &&
+        "messageId" in parsed &&
+        typeof (parsed as { messageId: unknown }).messageId === "string"
+      ) {
+        onEvent({
+          event: "done",
+          data: {
+            conversationId: (parsed as { conversationId: string })
+              .conversationId,
+            messageId: (parsed as { messageId: string }).messageId,
+          },
+        });
+      }
       return;
     }
 

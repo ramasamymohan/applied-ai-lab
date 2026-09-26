@@ -25,6 +25,8 @@ export async function buildApp(options: BuildAppOptions) {
   await app.register(cors, {
     origin: options.webOrigin,
     methods: ["GET", "POST"],
+    // Lets the browser read the conversation ID from streaming responses.
+    exposedHeaders: ["X-Conversation-Id"],
   });
 
   await app.register(rateLimit, {

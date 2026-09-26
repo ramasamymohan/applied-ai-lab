@@ -52,12 +52,17 @@ export type ConversationService = {
    * and returns the turn and an async iterable of streaming events.
    *
    * The caller is responsible for iterating the stream and writing SSE
-   * events to the response. When the stream completes, the assistant
-   * message is finalized in the database automatically.
+   * events to the response. The assistant message is finalized in the
+   * database automatically: before a terminal done/error event is yielded,
+   * or as `cancelled` if the caller stops iterating early (for example,
+   * because the client disconnected).
+   *
+   * The optional signal cancels the upstream provider request.
    */
   sendMessage(
     conversationId: string,
     message: string,
+    signal?: AbortSignal,
   ): Promise<SendMessageResult>;
 };
 
@@ -121,6 +126,7 @@ export function createConversationService(
     async sendMessage(
       conversationId: string,
       message: string,
+      signal?: AbortSignal,
     ): Promise<SendMessageResult> {
       // Generate a turn ID for this exchange
       const turnId = crypto.randomUUID();
@@ -152,12 +158,13 @@ export function createConversationService(
       const stream = persistentStream({
         messageRepository,
         assistantMessageId: turn.assistantMessage.id,
+        signal,
         innerStream: chatStreamingService.streamReply({
           message,
           contextMessages,
           conversationId,
           messageId: turn.assistantMessage.id,
-          signal: undefined, // Signal is attached by the route handler
+          signal,
         }),
       });
 
@@ -166,83 +173,95 @@ export function createConversationService(
   };
 }
 
+
 // ── Persistent streaming wrapper ──────────────────────────────────────────────
 
 type PersistentStreamOptions = {
   messageRepository: MessageRepository;
   assistantMessageId: string;
   innerStream: AsyncIterable<StreamEvent>;
+  signal?: AbortSignal;
 };
 
 /**
- * Wraps a raw streaming iterable and accumulates the generated text.
- * When the stream completes (done event) or fails (error event), the
- * assistant message is finalized in the database with the accumulated
- * content and the appropriate status.
+ * Wraps a raw streaming iterable, accumulates the generated text, and
+ * guarantees the assistant message leaves the `streaming` status.
  *
- * The caller iterates this wrapper instead of the raw stream. All events
- * are forwarded unchanged.
+ * Finalization rules:
+ *
+ *   - `done`   → finalized as `completed` BEFORE the event is yielded, so a
+ *                client that sees `done` knows the reply is already persisted.
+ *   - `error`  → finalized as `failed` BEFORE the event is yielded.
+ *   - consumer stops early (client disconnect, route `break`) → the
+ *                `finally` block finalizes as `cancelled` with the partial text.
+ *   - inner stream ends with no terminal event → `cancelled` if the signal was
+ *                aborted, otherwise `failed`.
+ *
+ * Finalizing before yielding matters: a consumer that `break`s out of
+ * `for await` calls `return()` on this generator, which resumes it at the
+ * `yield` and skips any code placed after it.
  */
 async function* persistentStream(
   options: PersistentStreamOptions,
 ): AsyncIterable<StreamEvent> {
-  const { messageRepository, assistantMessageId, innerStream } = options;
+  const { messageRepository, assistantMessageId, innerStream, signal } =
+    options;
 
   let accumulatedText = "";
   let finalized = false;
+
+  async function finalize(
+    status: "completed" | "failed" | "cancelled",
+  ): Promise<void> {
+    if (finalized) {
+      return;
+    }
+    await messageRepository.finalizeAssistantMessage(
+      assistantMessageId,
+      accumulatedText,
+      status,
+    );
+    finalized = true;
+  }
+
+  async function finalizeBestEffort(
+    status: "failed" | "cancelled",
+  ): Promise<void> {
+    try {
+      await finalize(status);
+    } catch {
+      // Best-effort — startup recovery marks leftover `streaming` rows as
+      // `interrupted` on the next restart.
+    }
+  }
 
   try {
     for await (const event of innerStream) {
       if (event.event === "delta") {
         accumulatedText += event.data.text;
+        yield event;
+        continue;
       }
-
-      yield event;
 
       if (event.event === "done") {
-        await messageRepository.finalizeAssistantMessage(
-          assistantMessageId,
-          accumulatedText,
-          "completed",
-        );
-        finalized = true;
+        await finalize("completed");
+        yield event;
         return;
       }
 
-      if (event.event === "error") {
-        await messageRepository.finalizeAssistantMessage(
-          assistantMessageId,
-          accumulatedText,
-          "failed",
-        );
-        finalized = true;
-        return;
-      }
+      // error event
+      await finalize("failed");
+      yield event;
+      return;
     }
 
-    // Stream ended without done or error — treat as cancelled
-    if (!finalized) {
-      await messageRepository.finalizeAssistantMessage(
-        assistantMessageId,
-        accumulatedText,
-        "cancelled",
-      );
-      finalized = true;
-    }
+    // Inner stream ended without a terminal event.
+    await finalize(signal?.aborted ? "cancelled" : "failed");
   } catch (err) {
-    // Finalize as failed if not already done
-    if (!finalized) {
-      try {
-        await messageRepository.finalizeAssistantMessage(
-          assistantMessageId,
-          accumulatedText,
-          "failed",
-        );
-      } catch {
-        // Best-effort finalization — the startup recovery will catch
-        // messages left in streaming status on next restart
-      }
-    }
+    await finalizeBestEffort("failed");
     throw err;
+  } finally {
+    // Runs when the consumer stops early. No-op if already finalized.
+    await finalizeBestEffort("cancelled");
   }
 }
