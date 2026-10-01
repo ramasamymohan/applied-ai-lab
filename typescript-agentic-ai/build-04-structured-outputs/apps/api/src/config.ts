@@ -30,6 +30,9 @@ const EnvironmentSchema = z.object({
     .min(64)
     .max(4_096)
     .default(512),
+  // Recent completed turns given to the request analyzer as context.
+  // 0 analyzes the latest message alone. Each turn adds input tokens.
+  ANALYSIS_CONTEXT_TURNS: z.coerce.number().int().min(0).max(10).default(2),
   // One repair retry after a parse or validation failure. "true" | "false".
   STRUCTURED_OUTPUT_REPAIR_ENABLED: z
     .enum(["true", "false"])

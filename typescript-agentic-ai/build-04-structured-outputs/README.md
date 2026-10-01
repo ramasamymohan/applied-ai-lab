@@ -2,7 +2,7 @@
 
 Part of the **From Prompt to Platform** series. Each build in this series is a fully independent, standalone application.
 
-> **Status: in progress — Commit 01 of 3.** This README describes what exists today and what is planned. Sections marked *(planned)* are not implemented yet.
+> **Status: in progress — Commit 02 of 3.** This README describes what exists today and what is planned. Sections marked *(planned)* are not implemented yet.
 
 ---
 
@@ -19,7 +19,9 @@ This build does not add retrieval, tools, or agent loops. It builds the contract
 | Model output | Free text only | Free text (streamed reply) + typed, validated structured results |
 | Contracts | None | Zod schema is the single source of truth; provider JSON Schema derived from it |
 | Failure handling | Streaming errors only | Named failure taxonomy for structured calls |
-| Turn lifecycle | Stream reply | *(planned, Commit 02)* analyze request, then decide, then reply |
+| Turn lifecycle | Stream reply | Analyze request, persist it, decide in application code, then reply |
+| Persistence | conversations, messages | + `turn_analyses` (migration 002) |
+| SSE events | delta, done, error | + optional `analysis` (additive) |
 | UI | Chat | *(planned, Commit 03)* recognized constraints and clarification state |
 
 Build 03 is unchanged and still independently runnable.
@@ -28,8 +30,8 @@ Build 03 is unchanged and still independently runnable.
 
 | # | Scope | Status |
 |---|---|---|
-| 01 | Structured generation layer, failure taxonomy, repair retry, config, `ShoppingRequest` contract | **Done (this commit)** |
-| 02 | Request understanding in the turn lifecycle (`turn_analyses` table, `analysis` SSE event) | Planned |
+| 01 | Structured generation layer, failure taxonomy, repair retry, config, `ShoppingRequest` contract | Done |
+| 02 | Request understanding in the turn lifecycle (`turn_analyses` table, `analysis` SSE event) | **Done (this commit)** |
 | 03 | Frontend and documentation | Planned |
 
 ---
@@ -61,8 +63,44 @@ OpenAI Responses adapter               strict json_schema output format
 | `structured/structured-generation-service.ts` | Validation, failure taxonomy, bounded repair retry. Never throws |
 | `structured/openai-structured-provider.ts` | OpenAI adapter: strict schema, refusal/incomplete detection, error classification |
 | `structured/contracts/shopping-request.ts` | `ShoppingRequest` v1 contract |
+| `services/request-analysis-service.ts` | Analysis prompt; maps every structured result to `completed` or `analysis_failed` |
+| `services/turn-decision.ts` | Application-owned clarify-or-answer rule |
+| `services/analysis-summary.ts` | Stored row to API summary, re-validating the payload |
+| `repositories/turn-analysis-repository.ts` | SQL for `turn_analyses` |
+| `services/conversation-service.ts` | Turn lifecycle: analyze, persist, decide, reply |
 
-The service is **not wired into any route yet**. Commit 02 connects it to the turn lifecycle.
+
+### Turn lifecycle (Commit 02)
+
+```
+POST /api/conversations/:id/messages
+  │  transaction: user message + assistant placeholder (status = streaming)
+  │  SSE headers sent immediately
+  ▼
+analyze request   (non-streaming structured call; recent turns as context)
+  │  persist to turn_analyses  (completed | analysis_failed)
+  │  emit SSE `analysis` (sanitized summary)
+  ▼
+decideTurn()      plain TypeScript, not model-driven
+  ├── clarify → stream the clarifying question as the reply (no chat-model call)
+  └── answer  → stream the model reply; analysis passed as a non-authoritative hint
+```
+
+Analysis runs **inside** the stream, after the headers are sent, so the connection opens at once and the `analysis` event arrives as soon as it is ready. The cost is that the first `delta` now waits for the analysis call; the route's existing `timeToFirstDeltaMs` log includes it, and the analysis call's own `latencyMs` is stored per turn.
+
+Decision rules (`services/turn-decision.ts`):
+
+| Analysis result | Application behavior |
+|---|---|
+| Failed, refused, truncated, invalid, or errored | Normal reply, no analysis context. Recorded as `analysis_failed`. The user sees no error |
+| `needs_clarification` with a non-empty question, intent not `small_talk` | Reply with that question. The model is not called again |
+| Anything else | Normal reply with the analysis as a hint inside `<request_analysis>` tags, marked as data and non-authoritative |
+
+Small talk is never held up by a clarifying question, whatever the model flagged.
+
+Cancellation during analysis cancels the provider call, skips persistence, and finalizes the assistant message as `cancelled`, as in Build 03.
+
+If saving the analysis fails, the error is logged and the turn continues.
 
 ### Failure taxonomy
 
@@ -82,7 +120,7 @@ Repair prompts contain validation paths and rules, plus a truncated copy of the 
 ### Contract versioning
 
 - Each contract has an integer `version` owned by the application, bumped on any change to a field's shape or meaning.
-- The model is not asked to emit the version. The application applies it and persists it beside the stored result (Commit 02).
+- The model is not asked to emit the version. The application applies it and persists it beside the stored result (`turn_analyses.contract_name` and `schema_version`).
 - Readers of persisted data must handle every version ever stored.
 
 ### `ShoppingRequest` v1
@@ -110,7 +148,34 @@ Deviation from the plan's draft: `schema_version` is applied by the application 
 
 ### Latency
 
-The structured step is non-streaming and, once wired in Commit 02, runs **before** the streamed reply, so it adds to time-to-first-token. Every result carries `latencyMs` (all attempts) so the cost is measured. Measurement approach and numbers will be documented in Commit 03 once there is something real to measure.
+The structured step is non-streaming and runs **before** the streamed reply, so it adds to time-to-first-token. Every result carries `latencyMs` (all attempts) so the cost is measured. Measurement approach and numbers will be documented in Commit 03 once there is something real to measure.
+
+---
+
+## Database
+
+Migration 002 adds `turn_analyses`, one row per turn, keyed by `turn_id`:
+
+| Column | Notes |
+|---|---|
+| turn_id | Primary key. Not a foreign key: in `messages`, `turn_id` is only unique together with `role` |
+| conversation_id | FK to conversations, `ON DELETE CASCADE` |
+| status | `completed` or `analysis_failed` |
+| failure_kind | Short label such as `refusal`, `invalid:schema_validation`, `provider_error:timeout`; set only on failure |
+| contract_name, schema_version | Which contract and version `payload` was written under |
+| payload | JSONB `ShoppingRequest`; set only on `completed` |
+| attempts, repaired, latency_ms | Provider calls made, whether the repair retry was needed, total wall-clock time |
+
+A check constraint ties `payload` and `failure_kind` to `status`. Analysis lives in its own table so `messages` stays the UI's history.
+
+```bash
+cd apps/api
+pnpm migrate        # fresh database: applies 001 and 002
+pnpm migrate:002    # existing Build 03 database: applies 002 only
+pnpm migrate:down   # drops all tables, including turn_analyses
+```
+
+Reading: stored payloads are re-validated on read against the contract they were written under. Rows with an unknown contract version or an invalid payload are left out of API responses rather than breaking the conversation.
 
 ---
 
@@ -131,6 +196,7 @@ MAX_CONTEXT_TURNS=10              # optional, default: 10
 STRUCTURED_OUTPUT_MODEL=          # optional, default: OPENAI_MODEL. Must support strict structured outputs
 STRUCTURED_OUTPUT_TIMEOUT_MS=15000       # optional, default: 15000 (1000–120000)
 STRUCTURED_OUTPUT_MAX_TOKENS=512         # optional, default: 512 (64–4096)
+ANALYSIS_CONTEXT_TURNS=2                 # optional, default: 2 (0–10). Recent completed turns given to the analyzer
 STRUCTURED_OUTPUT_REPAIR_ENABLED=true    # optional, default: true ("true" | "false")
 ```
 
@@ -146,7 +212,47 @@ VITE_API_BASE_URL=http://localhost:3000   # optional, default: http://localhost:
 
 ## API endpoints and SSE events
 
-Unchanged from Build 03 in this commit. See the Build 03 README for request/response examples. Commit 02 will add an optional `analysis` SSE event and extend `GET /api/conversations/:id`; existing events keep their meaning.
+Request and response shapes are unchanged from Build 03 (see its README). Two additive changes:
+
+### SSE: new optional `analysis` event
+
+Sent at most once per stream, before any `delta`:
+
+```
+event: analysis
+data: {"turnId":"…","status":"completed","intent":"product_search","needsClarification":false}
+```
+
+| Field | Meaning |
+|---|---|
+| status | `completed`, or `analysis_failed` (the reply still follows) |
+| intent | Classified intent, or `null` when analysis failed |
+| needsClarification | True when the application is replying with a clarifying question |
+
+Existing `delta`, `done`, and `error` events are unchanged. Clients that do not know `analysis` can ignore it, and the Build 03 web client does.
+
+A clarification turn streams as `analysis`, one `delta` containing the question, then `done`.
+
+### GET /api/conversations/:conversationId: new `analyses` array
+
+```json
+{
+  "conversation": {
+    "id": "…", "title": "…", "messages": [ … ],
+    "analyses": [
+      {
+        "turn_id": "…", "status": "completed", "schema_version": 1,
+        "intent": "product_search", "category": "rain jackets",
+        "budget": { "max": 150, "currency": "USD" },
+        "attributes": ["waterproof"], "needs_clarification": false
+      },
+      { "turn_id": "…", "status": "analysis_failed" }
+    ]
+  }
+}
+```
+
+Join to messages on `turn_id`. Summaries carry the recognized constraints, not failure details, latency, or raw model output. Field names are snake_case here to match the rest of this response, and camelCase in SSE events to match `done`. Here `needs_clarification` means the application asked a question, which can be narrower than the model's raw flag.
 
 ---
 
@@ -180,8 +286,11 @@ cd apps/web && pnpm lint && pnpm build
 
 ## Known limitations
 
-- The structured layer is not connected to the chat flow yet (Commit 02).
-- Structured output adds a model call and latency to every turn once wired in.
+- Every turn now makes an extra non-streaming model call before the reply starts, adding latency and cost. There is no off switch in this commit.
+- A failed analysis save is logged, not retried, so the `analysis` event and a later reload can disagree.
+- Analysis rows from unknown contract versions are skipped on read, not migrated.
+- The shopper's text and the model's interpretation (category, attributes) pass through the chat prompt; the interpretation is delimited and marked as non-authoritative, which mitigates but does not eliminate prompt injection.
+- The web client does not use `analysis` or `analyses` yet (Commit 03).
 - The classifier can be wrong, and nothing measures how often (Build 12).
 - The intent taxonomy is hand-written and small.
 - Structured outputs constrain shape, not truth.

@@ -1,8 +1,12 @@
 /**
- * SSE event contract for Build 03 streaming.
+ * SSE event contract for streaming (Build 03, extended in Build 04).
  *
- * Four application-level event types are used:
+ * Application-level event types:
  *
+ *   analysis — (Build 04, additive) Sanitized summary of how the application
+ *            understood the shopper's message. At most one per stream, before
+ *            any delta. Optional: clients that do not know it can ignore it,
+ *            and its absence means analysis did not run or was not reported.
  *   delta  — Carries newly generated text. Zero or more per stream.
  *   done   — Marks successful completion. Exactly one, after all deltas.
  *            Carries conversation and message identifiers so the client
@@ -36,13 +40,33 @@ export type DoneEvent = {
   };
 };
 
+/**
+ * Sanitized analysis summary. Contains the classified intent and whether the
+ * application is asking a clarifying question, never raw model output.
+ * `intent` is null when analysis failed. Analysis failure does not block the
+ * reply; it is reported so clients can stay quiet about it.
+ */
+export type AnalysisEvent = {
+  event: "analysis";
+  data: {
+    turnId: string;
+    status: "completed" | "analysis_failed";
+    intent: string | null;
+    needsClarification: boolean;
+  };
+};
+
 export type ErrorEvent = {
   event: "error";
   data: { message: string };
 };
 
 /** Union of all application-level streaming events. */
-export type StreamEvent = DeltaEvent | DoneEvent | ErrorEvent;
+export type StreamEvent =
+  | AnalysisEvent
+  | DeltaEvent
+  | DoneEvent
+  | ErrorEvent;
 
 // ── Serialisation ─────────────────────────────────────────────────────────────
 
@@ -69,6 +93,10 @@ export function doneEvent(
   messageId: string,
 ): DoneEvent {
   return { event: "done", data: { conversationId, messageId } };
+}
+
+export function analysisEvent(data: AnalysisEvent["data"]): AnalysisEvent {
+  return { event: "analysis", data };
 }
 
 export function errorEvent(message: string): ErrorEvent {

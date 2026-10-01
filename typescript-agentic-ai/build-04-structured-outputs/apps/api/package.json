@@ -11,8 +11,9 @@
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "tsx --test test/*.test.ts",
-    "migrate": "psql $DATABASE_URL -f migrations/001_create-conversations-and-messages.sql",
-    "migrate:down": "psql $DATABASE_URL -c 'DROP TABLE IF EXISTS messages; DROP TABLE IF EXISTS conversations; DROP TYPE IF EXISTS message_status;'"
+    "migrate": "psql $DATABASE_URL -v ON_ERROR_STOP=1 -f migrations/001_create-conversations-and-messages.sql -f migrations/002_create-turn-analyses.sql",
+    "migrate:002": "psql $DATABASE_URL -v ON_ERROR_STOP=1 -f migrations/002_create-turn-analyses.sql",
+    "migrate:down": "psql $DATABASE_URL -c 'DROP TABLE IF EXISTS turn_analyses; DROP TABLE IF EXISTS messages; DROP TABLE IF EXISTS conversations; DROP TYPE IF EXISTS message_status;'"
   },
   "keywords": [],
   "author": "",
