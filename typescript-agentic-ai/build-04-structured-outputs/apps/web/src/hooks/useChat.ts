@@ -7,6 +7,12 @@
  * failed, or stopped — the conversation is re-read from the server so the
  * view matches what was actually persisted.
  *
+ * Build 04: each turn may carry an analysis (what the application understood
+ * from the message). Full analyses come only from the server read, so the
+ * recognized constraints appear when a turn is reconciled. During streaming
+ * the `analysis` event is used only to flag a clarifying question. Analysis
+ * is decoration: its absence or failure never changes how a turn behaves.
+ *
  * Switching conversations is disabled while a reply is generating. Stopping
  * a reply aborts the request; the server finalizes the message as
  * `cancelled` with the partial text.
@@ -19,6 +25,7 @@ import {
   isAbortError,
   listConversations,
   streamConversationReply,
+  type AnalysisSummary,
   type ConversationMessage,
   type ConversationSummary,
   type MessageStatus,
@@ -31,7 +38,12 @@ export type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   status: MessageStatus;
+  /** Server turn ID. Null for optimistic messages until `analysis` arrives. */
+  turnId: string | null;
 };
+
+/** Analyses keyed by turn ID. */
+export type AnalysisByTurn = Record<string, AnalysisSummary>;
 
 /** idle → submitting (request sent, no text yet) → streaming → idle */
 export type Phase = "idle" | "submitting" | "streaming";
@@ -56,7 +68,16 @@ function toChatMessage(message: ConversationMessage): ChatMessage {
     role: message.role,
     content: message.content,
     status: message.status,
+    turnId: message.turn_id,
   };
+}
+
+function toAnalysisMap(analyses: AnalysisSummary[]): AnalysisByTurn {
+  const map: AnalysisByTurn = {};
+  for (const analysis of analyses) {
+    map[analysis.turn_id] = analysis;
+  }
+  return map;
 }
 
 function errorMessage(err: unknown): string {
@@ -79,6 +100,9 @@ export function useChat() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("idle");
+  const [analyses, setAnalyses] = useState<AnalysisByTurn>({});
+  // Turn whose reply is a clarifying question, known live before the read.
+  const [clarifyingTurnId, setClarifyingTurnId] = useState<string | null>(null);
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -142,6 +166,8 @@ export function useChat() {
       activeIdRef.current = id;
       setActiveId(id);
       setMessages([]);
+      setAnalyses({});
+      setClarifyingTurnId(null);
       setError(null);
       setLoadState("loading");
 
@@ -152,6 +178,7 @@ export function useChat() {
           return;
         }
         setMessages(detail.messages.map(toChatMessage));
+        setAnalyses(toAnalysisMap(detail.analyses));
         setLoadState("idle");
       } catch (err) {
         if (seq !== loadSeqRef.current) {
@@ -188,6 +215,8 @@ export function useChat() {
     activeIdRef.current = null;
     setActiveId(null);
     setMessages([]);
+    setAnalyses({});
+    setClarifyingTurnId(null);
     setError(null);
     setLoadState("idle");
   }, [isActive]);
@@ -221,6 +250,8 @@ export function useChat() {
         // what the user already saw, so wait and retry.
         if (detail.messages.every((m) => m.status !== "streaming")) {
           setMessages(detail.messages.map(toChatMessage));
+          setAnalyses(toAnalysisMap(detail.analyses));
+          setClarifyingTurnId(null);
           return;
         }
       } catch {
@@ -315,12 +346,19 @@ export function useChat() {
     setPhase("submitting");
     setMessages((current) => [
       ...current,
-      { id: turn.userId, role: "user", content: text, status: "completed" },
+      {
+        id: turn.userId,
+        role: "user",
+        content: text,
+        status: "completed",
+        turnId: null,
+      },
       {
         id: turn.assistantId,
         role: "assistant",
         content: "",
         status: "streaming",
+        turnId: null,
       },
     ]);
 
@@ -333,6 +371,19 @@ export function useChat() {
             activeIdRef.current = conversationId;
             setActiveId(conversationId);
           }
+        },
+
+        onAnalysis({ turnId, needsClarification }) {
+          // Link the optimistic messages to the server turn, and flag a
+          // clarifying question. Constraints arrive with the next read.
+          setMessages((current) =>
+            current.map((m) =>
+              m.id === turn.userId || m.id === turn.assistantId
+                ? { ...m, turnId }
+                : m,
+            ),
+          );
+          setClarifyingTurnId(needsClarification ? turnId : null);
         },
 
         onDelta(delta) {
@@ -396,6 +447,8 @@ export function useChat() {
 
     // Active conversation
     messages,
+    analyses,
+    clarifyingTurnId,
     loadState,
     retryLoad,
 

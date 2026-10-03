@@ -1,5 +1,5 @@
 /**
- * API client for Build 03.
+ * API client (Build 03, extended in Build 04 with analysis summaries).
  *
  * Two kinds of calls:
  *
@@ -54,9 +54,45 @@ const conversationListSchema = z.object({
   conversations: z.array(conversationSummarySchema),
 });
 
+// Build 04: how the application understood each turn. Intent stays a plain
+// string so a newer server adding intents does not break an older client.
+const analysisSummarySchema = z.discriminatedUnion("status", [
+  z.object({
+    turn_id: z.string(),
+    status: z.literal("completed"),
+    schema_version: z.number(),
+    intent: z.string(),
+    category: z.string().nullable(),
+    budget: z.object({
+      max: z.number().nullable(),
+      currency: z.string().nullable(),
+    }),
+    attributes: z.array(z.string()),
+    needs_clarification: z.boolean(),
+  }),
+  z.object({
+    turn_id: z.string(),
+    status: z.literal("analysis_failed"),
+  }),
+]);
+
+// Analyses are optional decoration. Missing, malformed, or unrecognized
+// entries are dropped one by one, so a bad analysis can never stop a
+// conversation from loading.
+const analysesSchema = z
+  .array(z.unknown())
+  .default([])
+  .transform((items) =>
+    items.flatMap((item) => {
+      const parsed = analysisSummarySchema.safeParse(item);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  );
+
 const conversationDetailSchema = z.object({
   conversation: conversationSummarySchema.extend({
     messages: z.array(conversationMessageSchema),
+    analyses: analysesSchema,
   }),
 });
 
@@ -65,6 +101,7 @@ const errorEnvelopeSchema = z.object({
 });
 
 export type MessageStatus = z.infer<typeof messageStatusSchema>;
+export type AnalysisSummary = z.infer<typeof analysisSummarySchema>;
 export type ConversationSummary = z.infer<typeof conversationSummarySchema>;
 export type ConversationMessage = z.infer<typeof conversationMessageSchema>;
 export type ConversationDetail = z.infer<
@@ -189,6 +226,16 @@ export type StreamError = {
 export type StreamCallbacks = {
   /** Called once when the stream is established and the conversation ID is known. */
   onStart: (info: { conversationId: string }) => void;
+  /**
+   * Called when the server reports how it understood the message (Build 04).
+   * Optional: older servers never send it, and it can arrive at most once.
+   */
+  onAnalysis?: (info: {
+    turnId: string;
+    status: "completed" | "analysis_failed";
+    intent: string | null;
+    needsClarification: boolean;
+  }) => void;
   /** Called for each text delta as it arrives. */
   onDelta: (text: string) => void;
   /** Called once when the server reports successful completion. */
@@ -277,7 +324,9 @@ export function streamConversationReply(
         return;
       }
 
-      if (event.event === "delta") {
+      if (event.event === "analysis") {
+        callbacks.onAnalysis?.(event.data);
+      } else if (event.event === "delta") {
         callbacks.onDelta(event.data.text);
       } else if (event.event === "done") {
         terminal = true;

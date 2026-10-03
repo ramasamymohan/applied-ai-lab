@@ -2,7 +2,7 @@
 
 Part of the **From Prompt to Platform** series. Each build in this series is a fully independent, standalone application.
 
-> **Status: in progress — Commit 02 of 3.** This README describes what exists today and what is planned. Sections marked *(planned)* are not implemented yet.
+> **Status: implemented across three commits.** Lint, type-check, and build results are not recorded here; run the validation commands below. Nothing in this build has been exercised against a live database or provider by the author of these docs unless stated.
 
 ---
 
@@ -22,7 +22,7 @@ This build does not add retrieval, tools, or agent loops. It builds the contract
 | Turn lifecycle | Stream reply | Analyze request, persist it, decide in application code, then reply |
 | Persistence | conversations, messages | + `turn_analyses` (migration 002) |
 | SSE events | delta, done, error | + optional `analysis` (additive) |
-| UI | Chat | *(planned, Commit 03)* recognized constraints and clarification state |
+| UI | Chat | Recognized constraints as chips on the user turn; clarification state; silent on analysis failure |
 
 Build 03 is unchanged and still independently runnable.
 
@@ -31,8 +31,8 @@ Build 03 is unchanged and still independently runnable.
 | # | Scope | Status |
 |---|---|---|
 | 01 | Structured generation layer, failure taxonomy, repair retry, config, `ShoppingRequest` contract | Done |
-| 02 | Request understanding in the turn lifecycle (`turn_analyses` table, `analysis` SSE event) | **Done (this commit)** |
-| 03 | Frontend and documentation | Planned |
+| 02 | Request understanding in the turn lifecycle (`turn_analyses` table, `analysis` SSE event) | Done |
+| 03 | Frontend and documentation | **Done (this commit)** |
 
 ---
 
@@ -146,9 +146,51 @@ Deviation from the plan's draft: `schema_version` is applied by the application 
 
 > The exact set of keywords a given model accepts in strict mode changes over time. The disallowed list is deliberately conservative and should be re-checked against current provider documentation.
 
-### Latency
+## Frontend (Commit 03)
 
-The structured step is non-streaming and runs **before** the streamed reply, so it adds to time-to-first-token. Every result carries `latencyMs` (all attempts) so the cost is measured. Measurement approach and numbers will be documented in Commit 03 once there is something real to measure.
+```
+apps/web/src
+├── lib/sse-parser.ts          + `analysis` event (malformed ones are dropped)
+├── lib/api.ts                 + Zod `analyses` on conversation reads; optional `onAnalysis` callback
+├── hooks/useChat.ts           + analyses by turn, clarification flag, turn IDs on messages
+└── components/MessageList.tsx + constraint chips, clarification tag
+```
+
+What the shopper sees:
+
+- **Chips** under their own message: category, `Up to <budget>`, and each attribute. Only constraints that were recognized are shown. Intent is not shown.
+- **"Asking a quick question"** tag on an assistant reply that is a clarifying question. It appears as soon as the `analysis` event arrives, and again after a reload.
+- **Nothing at all** when analysis failed, was refused, or is absent. No banner, no error. The reply is unaffected.
+
+When things appear:
+
+- While a reply streams, only the clarification tag is live. The `analysis` event carries intent and the clarification flag, not constraints.
+- Chips appear when the turn is reconciled: the existing end-of-stream read of the conversation now includes `analyses`. This keeps one source for constraints (the database) rather than a second client-side copy.
+
+Contract failures on the client:
+
+- `analyses` is parsed entry by entry. A missing array, an unrecognized shape, or one bad entry is dropped and everything else loads. A bad analysis can never stop a conversation from opening.
+- `intent` is a plain string, so a server that adds intents later does not break this client.
+- A malformed `analysis` SSE event is ignored; the stream continues.
+
+### Latency
+The structured step is non-streaming and runs **before** the streamed reply, so it adds to time-to-first-token. Every result carries `latencyMs` (all attempts) so the cost is measured, not guessed. No numbers are published here because none have been measured. To measure on your own data:
+
+- **Per turn, stored:** `turn_analyses.latency_ms`, plus `attempts` and `repaired`. For example:
+
+  ```sql
+  SELECT count(*) AS turns,
+         percentile_cont(0.5)  WITHIN GROUP (ORDER BY latency_ms) AS p50_ms,
+         percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms) AS p95_ms,
+         avg((attempts > 1)::int) AS retry_rate,
+         avg((status = 'analysis_failed')::int) AS failure_rate
+  FROM turn_analyses;
+  ```
+
+- **Per turn, logged:** the route's `Streaming generation finished` entry has `timeToFirstDeltaMs`, which now includes the analysis call. The `Request analysis finished` entry has the analysis `latencyMs`, status, and failure kind, and never the shopper's text.
+- **What to compare:** time to first delta here against the same measure on Build 03. A clarification turn skips the chat model entirely and can finish faster than a normal one.
+
+Worst case is two sequential provider calls, each bounded by `STRUCTURED_OUTPUT_TIMEOUT_MS`, before streaming starts.
 
 ---
 
@@ -290,7 +332,8 @@ cd apps/web && pnpm lint && pnpm build
 - A failed analysis save is logged, not retried, so the `analysis` event and a later reload can disagree.
 - Analysis rows from unknown contract versions are skipped on read, not migrated.
 - The shopper's text and the model's interpretation (category, attributes) pass through the chat prompt; the interpretation is delimited and marked as non-authoritative, which mitigates but does not eliminate prompt injection.
-- The web client does not use `analysis` or `analyses` yet (Commit 03).
+- Constraint chips appear only after the end-of-stream read, not while the reply streams.
+- The chip set is small and unstyled beyond the basics; there is no way to correct a misread constraint.
 - The classifier can be wrong, and nothing measures how often (Build 12).
 - The intent taxonomy is hand-written and small.
 - Structured outputs constrain shape, not truth.

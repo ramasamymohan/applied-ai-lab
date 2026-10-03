@@ -1,5 +1,5 @@
 /**
- * SSE stream parser for Build 03.
+ * SSE stream parser (Build 03, extended in Build 04 with `analysis`).
  *
  * Converts raw response chunks from fetch() into application-level events.
  * Handles all the tricky cases:
@@ -35,7 +35,25 @@ export type SseErrorEvent = {
   data: { message: string };
 };
 
-export type SseEvent = SseDeltaEvent | SseDoneEvent | SseErrorEvent;
+/**
+ * Build 04, additive: how the application understood the message. Optional on
+ * the wire; a stream without it is valid.
+ */
+export type SseAnalysisEvent = {
+  event: "analysis";
+  data: {
+    turnId: string;
+    status: "completed" | "analysis_failed";
+    intent: string | null;
+    needsClarification: boolean;
+  };
+};
+
+export type SseEvent =
+  | SseAnalysisEvent
+  | SseDeltaEvent
+  | SseDoneEvent
+  | SseErrorEvent;
 
 // ── Parser ────────────────────────────────────────────────────────────────────
 
@@ -175,6 +193,34 @@ export function createSseParser(onEvent: (event: SseEvent) => void): SseParser {
           : "An unknown error occurred.";
 
       onEvent({ event: "error", data: { message } });
+      return;
+    }
+
+    if (eventName === "analysis") {
+      // Malformed analysis is dropped: it is informational, so the reply
+      // continues without it.
+      if (typeof parsed === "object" && parsed !== null) {
+        const data = parsed as Record<string, unknown>;
+        const status = data["status"];
+        const intent = data["intent"];
+
+        if (
+          typeof data["turnId"] === "string" &&
+          (status === "completed" || status === "analysis_failed") &&
+          (typeof intent === "string" || intent === null) &&
+          typeof data["needsClarification"] === "boolean"
+        ) {
+          onEvent({
+            event: "analysis",
+            data: {
+              turnId: data["turnId"],
+              status,
+              intent,
+              needsClarification: data["needsClarification"],
+            },
+          });
+        }
+      }
       return;
     }
 

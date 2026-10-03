@@ -276,6 +276,36 @@
   opacity: 0.75;
 }
 
+/* ── Request understanding (Build 04) ───────────────── */
+
+.message-tag {
+  display: inline-block;
+  margin-bottom: 6px;
+  padding: 1px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chip {
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 20%);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
 /* ── Empty state and load error ─────────────────────── */
 
 .empty-state {

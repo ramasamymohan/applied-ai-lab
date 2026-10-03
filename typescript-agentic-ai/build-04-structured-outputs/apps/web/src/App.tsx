@@ -59,11 +59,13 @@ export default function App() {
                   (chat.activeId ? "Conversation" : "New conversation")}
               </p>
             </div>
-            <span className="status">Build 03</span>
+            <span className="status">Build 04</span>
           </header>
 
           <MessageList
             messages={chat.messages}
+            analyses={chat.analyses}
+            clarifyingTurnId={chat.clarifyingTurnId}
             phase={chat.phase}
             loadState={chat.loadState}
             onRetryLoad={chat.retryLoad}

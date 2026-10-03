@@ -1,12 +1,81 @@
 import { useEffect, useRef } from "react";
-import type { ChatMessage, LoadState, Phase } from "../hooks/useChat";
+import type {
+  AnalysisByTurn,
+  ChatMessage,
+  LoadState,
+  Phase,
+} from "../hooks/useChat";
+import type { AnalysisSummary } from "../lib/api";
 
 type MessageListProps = {
   messages: ChatMessage[];
+  analyses: AnalysisByTurn;
+  /** Turn whose reply is a clarifying question, known while streaming. */
+  clarifyingTurnId: string | null;
   phase: Phase;
   loadState: LoadState;
   onRetryLoad: () => void;
 };
+
+/**
+ * Short labels for what the application recognized in a user message.
+ * Only stated constraints are shown. A failed or missing analysis shows
+ * nothing at all, so analysis trouble never alarms the shopper.
+ */
+function constraintChips(analysis: AnalysisSummary | undefined): string[] {
+  if (!analysis || analysis.status !== "completed") {
+    return [];
+  }
+
+  const chips: string[] = [];
+
+  if (analysis.category) {
+    chips.push(analysis.category);
+  }
+
+  if (analysis.budget.max !== null) {
+    chips.push(`Up to ${formatBudget(analysis.budget.max, analysis.budget.currency)}`);
+  }
+
+  chips.push(...analysis.attributes);
+
+  return chips;
+}
+
+function formatBudget(max: number, currency: string | null): string {
+  if (currency) {
+    try {
+      return new Intl.NumberFormat(undefined, {
+        style: "currency",
+        currency,
+        maximumFractionDigits: 2,
+      }).format(max);
+    } catch {
+      // Unrecognized currency code: fall through to a plain number.
+      return `${max} ${currency}`;
+    }
+  }
+
+  return String(max);
+}
+
+function isClarification(
+  message: ChatMessage,
+  analyses: AnalysisByTurn,
+  clarifyingTurnId: string | null,
+): boolean {
+  if (message.role !== "assistant" || message.turnId === null) {
+    return false;
+  }
+
+  if (message.turnId === clarifyingTurnId) {
+    return true;
+  }
+
+  const analysis = analyses[message.turnId];
+
+  return analysis?.status === "completed" && analysis.needs_clarification;
+}
 
 function statusNote(message: ChatMessage, phase: Phase): string | null {
   if (message.role !== "assistant") {
@@ -33,6 +102,8 @@ function statusNote(message: ChatMessage, phase: Phase): string | null {
 
 export function MessageList({
   messages,
+  analyses,
+  clarifyingTurnId,
   phase,
   loadState,
   onRetryLoad,
@@ -79,6 +150,15 @@ export function MessageList({
 
       {messages.map((message) => {
         const note = statusNote(message, phase);
+        const chips =
+          message.role === "user" && message.turnId !== null
+            ? constraintChips(analyses[message.turnId])
+            : [];
+        const clarifying = isClarification(
+          message,
+          analyses,
+          clarifyingTurnId,
+        );
 
         return (
           <article
@@ -88,12 +168,24 @@ export function MessageList({
             <span className="message-role">
               {message.role === "user" ? "You" : "Storefront AI"}
             </span>
+            {clarifying && (
+              <span className="message-tag">Asking a quick question</span>
+            )}
             <p>
               {message.content ||
                 (message.status === "streaming" && isActive ? (
                   <span className="typing-cursor" aria-hidden="true" />
                 ) : null)}
             </p>
+            {chips.length > 0 && (
+              <ul className="chips" aria-label="What I picked up from this message">
+                {chips.map((chip, index) => (
+                  <li key={`${index}-${chip}`} className="chip">
+                    {chip}
+                  </li>
+                ))}
+              </ul>
+            )}
             {note && <span className="message-note">{note}</span>}
           </article>
         );
