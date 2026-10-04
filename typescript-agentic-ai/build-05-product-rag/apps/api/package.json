@@ -1,0 +1,48 @@
+{
+  "name": "storefront-ai-api",
+  "version": "1.0.0",
+  "description": "",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test test/*.test.ts",
+    "migrate": "psql $DATABASE_URL -v ON_ERROR_STOP=1 -f migrations/001_create-conversations-and-messages.sql -f migrations/002_create-turn-analyses.sql -f migrations/003_create-products.sql -f migrations/004_create-product-embeddings.sql",
+    "migrate:002": "psql $DATABASE_URL -v ON_ERROR_STOP=1 -f migrations/002_create-turn-analyses.sql",
+    "migrate:catalog": "psql $DATABASE_URL -v ON_ERROR_STOP=1 -f migrations/003_create-products.sql -f migrations/004_create-product-embeddings.sql",
+    "migrate:catalog:down": "psql $DATABASE_URL -c 'DROP TABLE IF EXISTS product_embeddings; DROP TABLE IF EXISTS products; DROP TYPE IF EXISTS product_stock_status;'",
+    "seed:products": "tsx src/scripts/seed-products.ts",
+    "migrate:down": "psql $DATABASE_URL -c 'DROP TABLE IF EXISTS product_embeddings; DROP TABLE IF EXISTS products; DROP TYPE IF EXISTS product_stock_status; DROP TABLE IF EXISTS turn_analyses; DROP TABLE IF EXISTS messages; DROP TABLE IF EXISTS conversations; DROP TYPE IF EXISTS message_status;'"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.10.1",
+      "onFail": "download"
+    }
+  },
+  "packageManager": "pnpm@12.10.1",
+  "dependencies": {
+    "@fastify/cors": "^11.3.1",
+    "@fastify/rate-limit": "^11.2.1",
+    "dotenv": "^18.0.6",
+    "fastify": "^5.12.5",
+    "fastify-plugin": "^5.0.1",
+    "openai": "^7.30.0",
+    "pg": "^8.16.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "@types/pg": "^8.15.4",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
