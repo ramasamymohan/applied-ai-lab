@@ -38,6 +38,18 @@ const EnvironmentSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((value) => value === "true"),
+
+  // ── Product embeddings (Build 05) ─────────────────────────────────────────
+  // Embedding model. Changing it makes stored embeddings stale; ingestion
+  // detects the difference per row and re-embeds.
+  EMBEDDING_MODEL: z.string().min(1).default("text-embedding-3-small"),
+  // Must equal the dimension of product_embeddings.embedding (migration 004
+  // fixes it at 1536). A mismatch is a hard failure, not a warning.
+  EMBEDDING_DIMENSIONS: z.coerce.number().int().min(1).max(16_000).default(1536),
+  // Texts per provider call during ingestion.
+  EMBEDDING_BATCH_SIZE: z.coerce.number().int().min(1).max(256).default(32),
+  // Per-call timeout for embedding requests.
+  EMBEDDING_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(30_000),
 });
 
 const parsedEnvironment = EnvironmentSchema.safeParse(process.env);

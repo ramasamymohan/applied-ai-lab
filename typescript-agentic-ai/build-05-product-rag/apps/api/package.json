@@ -16,6 +16,7 @@
     "migrate:catalog": "psql $DATABASE_URL -v ON_ERROR_STOP=1 -f migrations/003_create-products.sql -f migrations/004_create-product-embeddings.sql",
     "migrate:catalog:down": "psql $DATABASE_URL -c 'DROP TABLE IF EXISTS product_embeddings; DROP TABLE IF EXISTS products; DROP TYPE IF EXISTS product_stock_status;'",
     "seed:products": "tsx src/scripts/seed-products.ts",
+    "ingest:embeddings": "tsx src/scripts/ingest-product-embeddings.ts",
     "migrate:down": "psql $DATABASE_URL -c 'DROP TABLE IF EXISTS product_embeddings; DROP TABLE IF EXISTS products; DROP TYPE IF EXISTS product_stock_status; DROP TABLE IF EXISTS turn_analyses; DROP TABLE IF EXISTS messages; DROP TABLE IF EXISTS conversations; DROP TYPE IF EXISTS message_status;'"
   },
   "keywords": [],
