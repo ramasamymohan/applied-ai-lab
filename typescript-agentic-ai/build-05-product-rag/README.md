@@ -2,7 +2,7 @@
 
 Part of the **From Prompt to Platform** series. Each build in this series is a fully independent, standalone application.
 
-> **Status: in progress. Commits 01 and 02 of 04 are implemented.** Lint, type-check, and build results are not recorded here; run the validation commands below. Nothing in this build has been run against a live PostgreSQL/pgvector instance or the embeddings API by the author of these docs.
+> **Status: in progress. Commits 01 to 03 of 04 are implemented.** Lint, type-check, and build results are not recorded here; run the validation commands below. Nothing in this build has been run against a live PostgreSQL/pgvector instance the embeddings API, or the chat model by the author of these docs.
 
 ---
 
@@ -18,8 +18,10 @@ This build does **not** add reranking, query rewriting, tool calling, live inven
 |---|---|---|
 | Product knowledge | None (model's general knowledge) | Catalog in PostgreSQL (120 synthetic products) |
 | Vector storage | None | pgvector extension, `product_embeddings` table, filled by an ingestion CLI |
-| Retrieval | None | Planned (Commit 03) |
-| Grounding | None | Planned: application-side ID verification (Commit 03) |
+| Retrieval | None | Filtered pgvector cosine search per product-search turn |
+| Grounding | None | Model picks SKUs from retrieved candidates; application verifies them and composes the reply from database rows |
+| Persistence | conversations, messages, turn_analyses | + `product_embeddings`, `turn_groundings` (migration 005) |
+| SSE events | delta, done, error, analysis | + optional `grounding` (additive) |
 | UI | Chat + analysis chips | Planned: product cards (Commit 04) |
 
 Build 04 is unchanged and still independently runnable. The structured-output layer, turn lifecycle, SSE events, and API are described in the [Build 04 README](../build-04-structured-outputs/README.md) and are inherited as-is.
@@ -29,8 +31,8 @@ Build 04 is unchanged and still independently runnable. The structured-output la
 | # | Scope | Status |
 |---|---|---|
 | 01 | Catalog schema, pgvector tables, product repository, seed data and script | Done |
-| 02 | Idempotent embedding ingestion CLI (provider-isolated embedding service) | **Done (this commit)** |
-| 03 | Retrieval service and grounded answers with verified product IDs | Planned |
+| 02 | Idempotent embedding ingestion CLI (provider-isolated embedding service) | Done |
+| 03 | Retrieval service and grounded answers with verified product IDs | **Done (this commit)** |
 | 04 | Product cards in the web UI, empty states, final docs | Planned |
 
 ---
@@ -196,9 +198,106 @@ The provider call shapes (`embeddings.create`, the `dimensions` parameter, respo
 
 ---
 
+## Commit 03: retrieval and grounded answers
+
+```
+message ──> analysis (Build 04) ──> decideTurn ──> intent = product_search?
+                                                      │ yes
+        filters (budget, resolved category, in/low stock) + query text
+                                                      ▼
+   embed query ──> SQL vector search (cosine, top-k, similarity floor)
+                                                      ▼
+   0 hits → no_match (no model call)      model picks SKUs from CANDIDATES
+                                                      ▼
+   verify: SKU ∈ retrieved set → re-read rows from DB → compose reply → persist → SSE
+```
+
+Any other intent follows the Build 04 path (clarify, or a streamed chat-model reply). With `PRODUCT_GROUNDING_ENABLED=false`, product searches also take that path.
+
+### Files
+
+- `src/repositories/product-search-repository.ts`: the vector search SQL (ranking, filters, similarity floor, limit) and an "are there any embeddings?" check.
+- `src/retrieval/product-retrieval-service.ts`: embeds the query and searches. Returns hits or a sanitized failure reason; never throws.
+- `src/structured/contracts/grounded-product-answer.ts`: the model's output contract.
+- `src/services/grounded-answer-service.ts`: the pipeline above, including verification.
+- `src/services/grounded-reply.ts`: composes the reply text from database rows.
+- `src/repositories/turn-grounding-repository.ts`, `src/services/grounding-summary.ts`, `migrations/005_create-turn-groundings.sql`: persistence and API summary.
+- Changed: `conversation-service.ts` (one new branch), `streaming/sse.ts`, `product-repository.ts` (`listCategories`), `app.ts`, `server.ts`, `config.ts`.
+
+### What the application controls, and what the model does
+
+| Decided by the application | Contributed by the model |
+|---|---|
+| Whether to ground the turn (intent is `product_search`) | An intro sentence |
+| Filters: budget, and a category only if it matches a real catalog category | Which candidates fit, as SKUs |
+| Which products are candidates (top-k above the similarity floor, in or low stock only) | One short reason per pick |
+| Whether a SKU is acceptable (it must be in the retrieved set and exist in the database) | |
+| Names, brands, prices, currency, stock labels, and the final reply text | |
+
+The model never sees prices or stock, and is told not to mention them. After it answers, the picked products are re-read from the database and the reply is built from those rows.
+
+### Verification
+
+The model returns SKUs copied from the candidate list. SKUs are short and readable, so copy errors should be rarer than with UUIDs (deviation from "product ID": the application maps a verified SKU to a product ID). A SKU that was not retrieved, a duplicate, or a product that no longer exists is dropped and counted in `rejected_recommendation_count`. Nothing unverified reaches the shopper.
+
+### Defining "no relevant products"
+
+`no_match` is recorded with one of three reasons, all decided in code:
+
+- `no_candidates`: nothing cleared the similarity floor under the filters. No model call is made.
+- `model_no_match`: the model judged none of the candidates relevant.
+- `all_recommendations_rejected`: every recommendation failed verification.
+
+The reply is a fixed message built by the application that names the budget and category that were applied. It does not use model prose.
+
+### Failure behaviour
+
+If embedding the query, searching, or the grounded-answer call fails, the turn ends with a short "I couldn't search the catalog just now" reply and a `failed` grounding row with a sanitized reason. It does **not** fall back to an ungrounded model answer, because answering a product search from the model's general knowledge is what this build exists to prevent. If no embeddings exist for the configured model (ingestion never ran), the turn fails as `catalog_not_indexed` and a warning is logged, rather than reporting "no matches".
+
+### Category handling
+
+The model's `category` is free text ("rain jackets") and the catalog's categories are fixed. It becomes a hard filter only when it equals a catalog category after lowercasing and dropping punctuation and one trailing "s" (so "rain jacket" matches "Rain Jackets"). "Jackets" does not match and is left to the vector search, because a wrong hard filter hides the right products. Category and attributes are also appended to the query text.
+
+### Untrusted input
+
+The shopper's message and the retrieved product text are passed to the model as JSON-encoded values labeled as data, with instructions never to follow anything inside them. This reduces, but does not eliminate, prompt-injection risk. The structured contract limits what a hijacked response can do: it can only name SKUs, and every SKU is verified.
+
+### Persistence and API
+
+`turn_groundings` stores, per turn: status and reason, the filters applied, retrieval parameters (top-k, floor, embedding model), the retrieved IDs with similarity scores in rank order, the verified recommended IDs, and the rejected count.
+
+- **SSE `grounding` event** (additive): `{ turnId, status, products }`, sent before the reply text. `products` holds only verified recommendations read from the database (id, sku, name, brand, category, price, currency, stockStatus, imagePlaceholder) and is empty unless `grounded`. Clients that do not know the event ignore it (the Build 04 web client does).
+- **`GET /api/conversations/:id`** gains a `grounding` array: `{ turn_id, status, retrieved_product_ids, recommended_product_ids }`. IDs only; clients hydrate from the catalog.
+
+### Configuration
+
+| Variable | Default | Notes |
+|---|---|---|
+| `PRODUCT_GROUNDING_ENABLED` | `true` | Needs migration 005 and ingested embeddings |
+| `RETRIEVAL_TOP_K` | `5` | Candidates per turn |
+| `RETRIEVAL_MIN_SIMILARITY` | `0.3` | Cosine similarity floor. **An uncalibrated placeholder**: nothing here measures a good value |
+| `GROUNDING_MAX_TOKENS` | `1024` | Output cap for the grounded-answer call (uses its own provider instance) |
+
+Existing databases: `pnpm migrate:005`, then `pnpm ingest:embeddings`. Fresh databases: `pnpm migrate`.
+
+### Design decisions and trade-offs
+
+- **No token streaming for product searches.** The reply is composed after verification, so it arrives as one delta. The first visible text waits on analysis, query embedding, vector search and the grounded-answer call in sequence. Latency is not measured.
+- **Out-of-stock products are never recommended.** They are excluded at retrieval, so a shopper asking for a specific out-of-stock item gets "no match" rather than a pointer to it. Stock is static seed data.
+- **Hybrid full-text search was not added.** The plan allows it only if vector-only search observably fails on SKUs or brands. Nothing has been run, so there is no evidence either way. SKU is not part of the embedded text.
+- **Follow-up questions** ("what about in blue?") are searched on the latest message plus the analysis's category and attributes. There is no query rewriting (a non-goal), so short follow-ups may retrieve poorly.
+- **Intro and reasons are not verified.** Only product identity, price and stock are. A reason can still overclaim ("all waterproof").
+- **Filtered HNSW caveat.** At larger scale, pgvector applies filters after an index scan and can return fewer than top-k rows. At this catalog size the planner is expected to scan exactly; that has not been checked with `EXPLAIN`.
+
+### Type fixes outside the feature
+
+Two optional `signal` properties in the inherited Build 04 code (`StreamReplyOptions` and the persistent-stream options) were widened to `AbortSignal | undefined`. A partial type-check suggested they conflict with `exactOptionalPropertyTypes`. Build 04 itself was not changed.
+
+---
+
 ## Environment variables
 
-Commit 01 adds none. Commit 02 adds the four `EMBEDDING_*` variables above (all defaulted). `OPENAI_API_KEY` stays backend-only; never place keys or secrets in `VITE_` variables.
+Commit 01 adds none. Commit 02 adds the four `EMBEDDING_*` variables above and Commit 03 the four retrieval/grounding variables above (all defaulted). `OPENAI_API_KEY` stays backend-only; never place keys or secrets in `VITE_` variables.
 
 ## Local setup
 
@@ -229,12 +328,15 @@ These have not been run as part of this commit's documentation. Some inherited B
 
 - Seed data is synthetic and small (120 products). Retrieval quality on it says little about a real catalog.
 - Stock status is static seed data, not live inventory.
-- The catalog is not queried by the chat flow yet. Embeddings exist only after you run ingestion.
+- Product searches are grounded only after migration 005 and ingestion have run; before that they fail as `catalog_not_indexed`.
+- The similarity floor and top-k are uncalibrated; retrieval quality, latency and cost are unmeasured.
+- The web client does not render grounding data yet (Commit 04); recommendations appear as plain text in the reply.
+- Model-written intro and reasons are unverified prose.
+- A conversation reloaded from history shows the stored reply text; the `grounding` array holds IDs only.
 - Failed batches are not retried within a run; re-run the CLI.
-- Embedding quality is unmeasured; no retrieval exists to measure it.
 - No retrieval-quality measurement exists yet.
-- Nothing here has been executed against PostgreSQL/pgvector or the embeddings API.
+- Nothing here has been executed against PostgreSQL/pgvector, the embeddings API, or the chat model.
 
 ## Next constraint
 
-Embeddings exist but nothing reads them. Commit 03 adds retrieval (SQL vector search with metadata filters) and grounded answers, where every recommended product ID is verified against the database.
+Recommendations exist only as text in the reply. Commit 04 renders product cards from the verified `grounding` data, with empty and "nothing matched" states.

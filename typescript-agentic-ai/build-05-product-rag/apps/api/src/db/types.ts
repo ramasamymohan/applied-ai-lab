@@ -71,3 +71,21 @@ export type ProductRow = {
   created_at: Date;
   updated_at: Date;
 };
+
+export type TurnGroundingStatus = "grounded" | "no_match" | "failed";
+
+export type TurnGroundingRow = {
+  turn_id: string;
+  conversation_id: string;
+  status: TurnGroundingStatus;
+  reason: string | null;
+  /** JSONB. Untrusted until re-validated by a reader. */
+  filters: unknown;
+  retrieval_params: unknown;
+  /** JSONB array of { productId, similarity } in rank order. */
+  retrieved: unknown;
+  recommended_product_ids: string[];
+  rejected_recommendation_count: number;
+  latency_ms: number;
+  created_at: Date;
+};

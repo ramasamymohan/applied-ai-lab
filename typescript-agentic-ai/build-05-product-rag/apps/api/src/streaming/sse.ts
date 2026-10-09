@@ -1,5 +1,5 @@
 /**
- * SSE event contract for streaming (Build 03, extended in Build 04).
+ * SSE event contract for streaming (Build 03, extended in Builds 04 and 05).
  *
  * Application-level event types:
  *
@@ -7,6 +7,10 @@
  *            understood the shopper's message. At most one per stream, before
  *            any delta. Optional: clients that do not know it can ignore it,
  *            and its absence means analysis did not run or was not reported.
+ *   grounding — (Build 05, additive) For a product-search turn: how the answer
+ *            was grounded in the catalog, with the verified recommended
+ *            products read from the database. At most one per stream, before
+ *            the delta that carries the reply text. Optional and ignorable.
  *   delta  — Carries newly generated text. Zero or more per stream.
  *   done   — Marks successful completion. Exactly one, after all deltas.
  *            Carries conversation and message identifiers so the client
@@ -56,6 +60,32 @@ export type AnalysisEvent = {
   };
 };
 
+/** A verified product, read from the database (never from model output). */
+export type GroundedProductSummary = {
+  id: string;
+  sku: string;
+  name: string;
+  brand: string;
+  category: string;
+  price: number;
+  currency: string;
+  stockStatus: "in_stock" | "low_stock" | "out_of_stock";
+  imagePlaceholder: string;
+};
+
+/**
+ * `products` holds only application-verified recommendations, in order. It is
+ * empty unless status is "grounded".
+ */
+export type GroundingEvent = {
+  event: "grounding";
+  data: {
+    turnId: string;
+    status: "grounded" | "no_match" | "failed";
+    products: GroundedProductSummary[];
+  };
+};
+
 export type ErrorEvent = {
   event: "error";
   data: { message: string };
@@ -64,6 +94,7 @@ export type ErrorEvent = {
 /** Union of all application-level streaming events. */
 export type StreamEvent =
   | AnalysisEvent
+  | GroundingEvent
   | DeltaEvent
   | DoneEvent
   | ErrorEvent;
@@ -97,6 +128,10 @@ export function doneEvent(
 
 export function analysisEvent(data: AnalysisEvent["data"]): AnalysisEvent {
   return { event: "analysis", data };
+}
+
+export function groundingEvent(data: GroundingEvent["data"]): GroundingEvent {
+  return { event: "grounding", data };
 }
 
 export function errorEvent(message: string): ErrorEvent {

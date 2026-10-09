@@ -38,6 +38,9 @@ export type ProductRepository = {
 
   /** Filtered, deterministically ordered list (name, then id). */
   list(filter?: ProductFilter): Promise<ProductRow[]>;
+
+  /** Distinct category names as stored, sorted. Used to resolve model-supplied categories. */
+  listCategories(): Promise<string[]>;
 };
 
 export const DEFAULT_PRODUCT_LIST_LIMIT = 20;
@@ -148,6 +151,13 @@ export function createProductRepository(pool: Pool): ProductRepository {
       );
 
       return result.rows;
+    },
+
+    async listCategories(): Promise<string[]> {
+      const result = await pool.query<{ category: string }>(
+        "SELECT DISTINCT category FROM products ORDER BY category ASC",
+      );
+      return result.rows.map((row) => row.category);
     },
   };
 }

@@ -13,6 +13,13 @@
  *   createTurn (transaction) → analyze request → persist analysis
  *     → decide (application code) → clarifying reply | streamed model reply
  *
+ * Build 05 adds one branch: when the decision is to answer and the intent is
+ * `product_search`, the reply is grounded in the catalog instead of streamed
+ * from the chat model:
+ *
+ *   ... → decide → retrieve → model picks SKUs → verify → persist grounding
+ *     → `grounding` event → reply composed by the application
+ *
  * Analysis never blocks a reply: any analysis failure is recorded as
  * `analysis_failed` and the turn continues as a normal conversation.
  *
@@ -35,8 +42,11 @@ import {
   analysisEvent,
   deltaEvent,
   doneEvent,
+  errorEvent,
+  groundingEvent,
   type StreamEvent,
 } from "../streaming/sse.js";
+import type { ShoppingRequest } from "../structured/contracts/shopping-request.js";
 import type { TurnAnalysisRepository } from "../repositories/turn-analysis-repository.js";
 import { toAnalysisSummary, type AnalysisSummary } from "./analysis-summary.js";
 import type {
@@ -44,6 +54,12 @@ import type {
   RequestAnalysisService,
 } from "./request-analysis-service.js";
 import { decideTurn } from "./turn-decision.js";
+import type { TurnGroundingRepository } from "../repositories/turn-grounding-repository.js";
+import type {
+  GroundedAnswerService,
+  GroundingResult,
+} from "./grounded-answer-service.js";
+import { toGroundingSummary, type GroundingSummary } from "./grounding-summary.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -51,6 +67,8 @@ export type ConversationWithMessages = ConversationRow & {
   messages: MessageRow[];
   /** Build 04: per-turn analysis summaries, oldest first. Additive. */
   analyses: AnalysisSummary[];
+  /** Build 05: per-turn grounding summaries (IDs only), oldest first. Additive. */
+  grounding: GroundingSummary[];
 };
 
 export type SendMessageResult = {
@@ -101,6 +119,12 @@ type CreateConversationServiceOptions = {
   turnAnalysisRepository?: TurnAnalysisRepository | undefined;
   /** Number of recent completed turns given to the analyzer as context. */
   analysisContextTurns?: number | undefined;
+  /**
+   * Build 05. When provided, product-search turns are grounded in the catalog.
+   * When omitted, they are answered by the chat model as in Build 04.
+   */
+  groundedAnswerService?: GroundedAnswerService | undefined;
+  turnGroundingRepository?: TurnGroundingRepository | undefined;
   logger?: ServiceLogger | undefined;
 };
 
@@ -136,6 +160,8 @@ export function createConversationService(
     requestAnalysisService,
     turnAnalysisRepository,
     analysisContextTurns = 2,
+    groundedAnswerService,
+    turnGroundingRepository,
     logger,
   } = options;
 
@@ -171,7 +197,14 @@ export function createConversationService(
         });
       }
 
-      return { ...conversation, messages, analyses };
+      let grounding: GroundingSummary[] = [];
+
+      if (turnGroundingRepository) {
+        const rows = await turnGroundingRepository.findByConversationId(id);
+        grounding = rows.map(toGroundingSummary);
+      }
+
+      return { ...conversation, messages, analyses, grounding };
     },
 
     async sendMessage(
@@ -225,6 +258,8 @@ export function createConversationService(
           requestAnalysisService,
           turnAnalysisRepository,
           analysisContextMessages: Math.max(0, analysisContextTurns) * 2,
+          groundedAnswerService,
+          turnGroundingRepository,
           logger,
         }),
       });
@@ -248,6 +283,8 @@ type TurnEventsOptions = {
   requestAnalysisService: RequestAnalysisService | undefined;
   turnAnalysisRepository: TurnAnalysisRepository | undefined;
   analysisContextMessages: number;
+  groundedAnswerService: GroundedAnswerService | undefined;
+  turnGroundingRepository: TurnGroundingRepository | undefined;
   logger: ServiceLogger | undefined;
 };
 
@@ -367,6 +404,19 @@ async function* turnEvents(
     return;
   }
 
+  if (
+    decision.analysis !== null &&
+    decision.analysis.intent === "product_search" &&
+    options.groundedAnswerService
+  ) {
+    yield* groundedTurnEvents(
+      options,
+      options.groundedAnswerService,
+      decision.analysis,
+    );
+    return;
+  }
+
   yield* options.chatStreamingService.streamReply({
     message: options.message,
     contextMessages: options.contextMessages,
@@ -377,13 +427,115 @@ async function* turnEvents(
   });
 }
 
+/**
+ * Product-search turn: ground the reply in the catalog.
+ *
+ * The reply is composed by the application after verification, so it is
+ * emitted as a single delta rather than streamed token by token. The turn's
+ * visible latency is analysis + query embedding + vector search + grounded
+ * generation, in sequence.
+ *
+ * A grounding failure is shown as a short "couldn't search" reply; it never
+ * falls back to an ungrounded model answer.
+ */
+async function* groundedTurnEvents(
+  options: TurnEventsOptions,
+  groundedAnswerService: GroundedAnswerService,
+  analysis: ShoppingRequest,
+): AsyncIterable<StreamEvent> {
+  const { turnId, conversationId, logger } = options;
+
+  const recent =
+    options.analysisContextMessages === 0
+      ? []
+      : options.contextMessages.slice(-options.analysisContextMessages);
+
+  let result: GroundingResult;
+  try {
+    result = await groundedAnswerService.answer({
+      analysis,
+      message: options.message,
+      contextMessages: recent,
+      signal: options.signal,
+    });
+  } catch (err) {
+    // The service is meant never to throw; this guards a bug, not a flow.
+    logger?.warn({ err, conversationId, turnId }, "Grounded answer crashed");
+    yield errorEvent(
+      "Something went wrong while searching the catalog. Please try again.",
+    );
+    return;
+  }
+
+  // A cancelled turn has nothing worth keeping or showing.
+  if (result.aborted || options.signal?.aborted) {
+    return;
+  }
+
+  // Log metadata only: never the shopper's text, product text, or model output.
+  logger?.info(
+    {
+      conversationId,
+      turnId,
+      status: result.status,
+      reason: result.reason,
+      retrievedCount: result.retrieved.length,
+      recommendedCount: result.products.length,
+      rejectedRecommendationCount: result.rejectedRecommendationCount,
+      latencyMs: result.latencyMs,
+    },
+    "Product grounding finished",
+  );
+
+  if (options.turnGroundingRepository) {
+    try {
+      await options.turnGroundingRepository.save({
+        turnId,
+        conversationId,
+        status: result.status,
+        reason: result.reason,
+        filters: result.filters,
+        retrievalParams: result.retrievalParams,
+        retrieved: result.retrieved,
+        recommendedProductIds: result.products.map((product) => product.id),
+        rejectedRecommendationCount: result.rejectedRecommendationCount,
+        latencyMs: result.latencyMs,
+      });
+    } catch (err) {
+      logger?.warn(
+        { err, conversationId, turnId },
+        "Failed to persist product grounding",
+      );
+    }
+  }
+
+  yield groundingEvent({
+    turnId,
+    status: result.status,
+    products: result.products.map((product) => ({
+      id: product.id,
+      sku: product.sku,
+      name: product.name,
+      brand: product.brand,
+      category: product.category,
+      price: product.price,
+      currency: product.currency,
+      stockStatus: product.stock_status,
+      imagePlaceholder: product.image_placeholder,
+    })),
+  });
+
+  yield deltaEvent(result.text);
+  yield doneEvent(conversationId, options.assistantMessageId);
+}
+
 // ── Persistent streaming wrapper ──────────────────────────────────────────────
 
 type PersistentStreamOptions = {
   messageRepository: MessageRepository;
   assistantMessageId: string;
   innerStream: AsyncIterable<StreamEvent>;
-  signal?: AbortSignal;
+  signal?: AbortSignal | undefined;
 };
 
 /**
@@ -446,7 +598,7 @@ async function* persistentStream(
         continue;
       }
 
-      if (event.event === "analysis") {
+      if (event.event === "analysis" || event.event === "grounding") {
         // Informational only; does not affect the persisted message.
         yield event;
         continue;

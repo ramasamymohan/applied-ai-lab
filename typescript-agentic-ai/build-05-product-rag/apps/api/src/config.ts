@@ -50,6 +50,21 @@ const EnvironmentSchema = z.object({
   EMBEDDING_BATCH_SIZE: z.coerce.number().int().min(1).max(256).default(32),
   // Per-call timeout for embedding requests.
   EMBEDDING_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(30_000),
+
+  // ── Product retrieval and grounding (Build 05) ────────────────────────────
+  // Candidates retrieved per product-search turn.
+  RETRIEVAL_TOP_K: z.coerce.number().int().min(1).max(20).default(5),
+  // Cosine similarity floor. Candidates below it are not returned. The default
+  // is an uncalibrated placeholder: tune it against real queries.
+  RETRIEVAL_MIN_SIMILARITY: z.coerce.number().min(0).max(1).default(0.3),
+  // Output token cap for the grounded-answer call. It needs more room than
+  // request analysis because it returns up to five recommendations.
+  GROUNDING_MAX_TOKENS: z.coerce.number().int().min(128).max(4_096).default(1_024),
+  // Ground product-search turns in the catalog: "true" | "false".
+  PRODUCT_GROUNDING_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
 });
 
 const parsedEnvironment = EnvironmentSchema.safeParse(process.env);

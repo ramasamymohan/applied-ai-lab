@@ -44,7 +44,7 @@ export type StreamReplyOptions = {
   /** Assistant message ID — passed through to the done event. */
   messageId: string;
   /** Optional abort signal for cancellation. */
-  signal?: AbortSignal;
+  signal?: AbortSignal | undefined;
   /**
    * Build 04: the application's interpretation of the user's message.
    * Non-authoritative context for the model. Omitted when analysis failed.

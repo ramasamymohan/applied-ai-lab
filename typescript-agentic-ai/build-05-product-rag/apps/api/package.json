@@ -11,13 +11,14 @@
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "tsx --test test/*.test.ts",
-    "migrate": "psql $DATABASE_URL -v ON_ERROR_STOP=1 -f migrations/001_create-conversations-and-messages.sql -f migrations/002_create-turn-analyses.sql -f migrations/003_create-products.sql -f migrations/004_create-product-embeddings.sql",
+    "migrate": "psql $DATABASE_URL -v ON_ERROR_STOP=1 -f migrations/001_create-conversations-and-messages.sql -f migrations/002_create-turn-analyses.sql -f migrations/003_create-products.sql -f migrations/004_create-product-embeddings.sql -f migrations/005_create-turn-groundings.sql",
     "migrate:002": "psql $DATABASE_URL -v ON_ERROR_STOP=1 -f migrations/002_create-turn-analyses.sql",
     "migrate:catalog": "psql $DATABASE_URL -v ON_ERROR_STOP=1 -f migrations/003_create-products.sql -f migrations/004_create-product-embeddings.sql",
+    "migrate:005": "psql $DATABASE_URL -v ON_ERROR_STOP=1 -f migrations/005_create-turn-groundings.sql",
     "migrate:catalog:down": "psql $DATABASE_URL -c 'DROP TABLE IF EXISTS product_embeddings; DROP TABLE IF EXISTS products; DROP TYPE IF EXISTS product_stock_status;'",
     "seed:products": "tsx src/scripts/seed-products.ts",
     "ingest:embeddings": "tsx src/scripts/ingest-product-embeddings.ts",
-    "migrate:down": "psql $DATABASE_URL -c 'DROP TABLE IF EXISTS product_embeddings; DROP TABLE IF EXISTS products; DROP TYPE IF EXISTS product_stock_status; DROP TABLE IF EXISTS turn_analyses; DROP TABLE IF EXISTS messages; DROP TABLE IF EXISTS conversations; DROP TYPE IF EXISTS message_status;'"
+    "migrate:down": "psql $DATABASE_URL -c 'DROP TABLE IF EXISTS turn_groundings; DROP TABLE IF EXISTS product_embeddings; DROP TABLE IF EXISTS products; DROP TYPE IF EXISTS product_stock_status; DROP TABLE IF EXISTS turn_analyses; DROP TABLE IF EXISTS messages; DROP TABLE IF EXISTS conversations; DROP TYPE IF EXISTS message_status;'"
   },
   "keywords": [],
   "author": "",

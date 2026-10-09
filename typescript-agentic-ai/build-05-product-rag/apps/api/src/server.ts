@@ -6,6 +6,8 @@ import { createMessageRepository } from "./repositories/message-repository.js";
 import { createOpenAIStructuredProvider } from "./structured/openai-structured-provider.js";
 import { createStructuredGenerationService } from "./structured/structured-generation-service.js";
 import { createRequestAnalysisService } from "./services/request-analysis-service.js";
+import { createEmbeddingService } from "./embeddings/embedding-service.js";
+import { createOpenAIEmbeddingProvider } from "./embeddings/openai-embedding-provider.js";
 
 async function main(): Promise<void> {
   const chatStreamingService = createChatStreamingService({
@@ -29,6 +31,34 @@ async function main(): Promise<void> {
     }),
   });
 
+  // Product grounding (Build 05). The grounded-answer call returns up to five
+  // recommendations, so it gets its own provider with a larger output cap.
+  const grounding = config.PRODUCT_GROUNDING_ENABLED
+    ? {
+        embeddings: createEmbeddingService({
+          provider: createOpenAIEmbeddingProvider({
+            apiKey: config.OPENAI_API_KEY,
+            model: config.EMBEDDING_MODEL,
+            dimensions: config.EMBEDDING_DIMENSIONS,
+            timeoutMs: config.EMBEDDING_TIMEOUT_MS,
+          }),
+          model: config.EMBEDDING_MODEL,
+          dimensions: config.EMBEDDING_DIMENSIONS,
+        }),
+        structuredGeneration: createStructuredGenerationService({
+          provider: createOpenAIStructuredProvider({
+            apiKey: config.OPENAI_API_KEY,
+            model: config.STRUCTURED_OUTPUT_MODEL ?? config.OPENAI_MODEL,
+            timeoutMs: config.STRUCTURED_OUTPUT_TIMEOUT_MS,
+            maxOutputTokens: config.GROUNDING_MAX_TOKENS,
+          }),
+          repairEnabled: config.STRUCTURED_OUTPUT_REPAIR_ENABLED,
+        }),
+        topK: config.RETRIEVAL_TOP_K,
+        minSimilarity: config.RETRIEVAL_MIN_SIMILARITY,
+      }
+    : undefined;
+
   const app = await buildApp({
     webOrigin: config.WEB_ORIGIN,
     databaseUrl: config.DATABASE_URL,
@@ -36,6 +66,7 @@ async function main(): Promise<void> {
     chatStreamingService,
     requestAnalysisService,
     analysisContextTurns: config.ANALYSIS_CONTEXT_TURNS,
+    grounding,
   });
 
   // ── Startup recovery ─────────────────────────────────────────────────────
