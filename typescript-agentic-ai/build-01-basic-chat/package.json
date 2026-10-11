@@ -1,0 +1,13 @@
+{
+  "name": "build-01-basic-chat",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "pnpm --parallel --filter \"./apps/*\" dev"
+  },
+  "keywords": [],
+  "author": "Ramasamy Mohan",
+  "license": "ISC"
+}

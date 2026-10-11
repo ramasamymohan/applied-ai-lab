@@ -40,14 +40,14 @@ Create `.env` in `apps/api/`:
 
 ```env
 OPENAI_API_KEY=sk-...your-key-here...
-MODEL=gpt-4o-mini
+MODEL=gpt-6-luna
 WEB_ORIGIN=http://localhost:5173
 PORT=3000
 ```
 
 **`OPENAI_API_KEY`** — Your OpenAI API key. Never commit this.
 
-**`MODEL`** — Model name to use for generations (e.g., `gpt-4o-mini`, `gpt-4o`).
+**`MODEL`** — Model name to use for generations (e.g., `gpt-6-luna`, `gpt-4o`).
 
 **`WEB_ORIGIN`** — CORS origin for the frontend. In development, `http://localhost:5173`.
 

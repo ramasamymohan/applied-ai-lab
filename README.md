@@ -23,7 +23,7 @@ This series bridges the gap between "hello world" LLM examples and production-re
 | ---- | ------------------------------------------------------------------ | ------------------------------------------------------- |
 | 1    | Basic LLM chat and a server-side AI API                            | `typescript-agentic-ai/build-01-basic-chat/`            |
 | 2    | End-to-end streaming with React, Fastify, and TypeScript           | `typescript-agentic-ai/build-02-streaming/`             |
-| 3    | Conversation history and persistent state                          | `typescript-agentic-ai/build-03-conversation-state/`    |
+| 3    | Conversation history and persistent state                          | `typescript-agentic-ai/build-03-conversation-history/`    |
 | 4    | Structured outputs and reliable model contracts                    | `typescript-agentic-ai/build-04-structured-outputs/`    |
 | 5    | Product knowledge, embeddings, vector search, and RAG              | `typescript-agentic-ai/build-05-product-rag/`           |
 | 6    | Tool calling and controlled access to business capabilities        | `typescript-agentic-ai/build-06-tool-calling/`          |
@@ -86,7 +86,7 @@ applied-ai-lab/
 │   │   ├── .env.example
 │   │   └── README.md           # Build-specific docs
 │   ├── build-02-streaming/     # Part 2: Streaming
-│   ├── build-03-conversation-state/
+│   ├── build-03-conversation-history/
 │   └── ...
 ├── README.md                   # This file
 └── (This project documentation)
@@ -233,6 +233,6 @@ The final builds (Parts 12–13) focus on these hardening steps.
 
 ---
 
-**Authored by:** Ramya Samymohan  
+**Authored by:** Ramasamy Mohan  
 **Series:** From Prompt to Platform  
 **Updated:** October 2026

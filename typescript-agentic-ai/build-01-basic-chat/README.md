@@ -64,7 +64,7 @@ Create `.env` in `apps/api/`:
 
 ```env
 OPENAI_API_KEY=your_key_here
-MODEL=gpt-4o-mini
+MODEL=gpt-6-luna
 WEB_ORIGIN=http://localhost:5173
 ```
 
@@ -147,7 +147,7 @@ A simple integration test validates the `/api/chat` endpoint and error handling.
 See `.env.example` for required variables:
 
 - `OPENAI_API_KEY` — Your OpenAI API key (backend only)
-- `MODEL` — Model name (e.g., `gpt-4o-mini`)
+- `MODEL` — Model name (e.g., `gpt-6-luna`)
 - `WEB_ORIGIN` — CORS origin for the frontend (e.g., `http://localhost:5173`)
 
 Never commit actual credentials. Use `.env` locally and a secrets manager in production.
