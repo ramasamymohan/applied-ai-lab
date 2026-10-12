@@ -53,13 +53,32 @@ export async function registerChatRoutes(
 
     // Commit SSE headers before writing any body. After this point we cannot
     // send HTTP status codes — errors go through the SSE error event.
-    reply.raw.writeHead(200, {
-      "Content-Type": "text/event-stream",
+    // reply.raw.writeHead(200, {
+    //   "Content-Type": "text/event-stream",
+    //   "Cache-Control": "no-cache, no-transform",
+    //   Connection: "keep-alive",
+    //   // Prevents Nginx and other reverse proxies from buffering the stream
+    //   "X-Accel-Buffering": "no",
+    // });
+
+
+    // Preserve headers registered by Fastify plugins, including CORS.
+    const responseHeaders = {
+      "Access-Control-Allow-Origin": reply.getHeader("Access-Control-Allow-Origin"),
+      ...(reply.getHeader("Vary")
+        ? { Vary: reply.getHeader("Vary") }
+        : {}),
+      "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
-      // Prevents Nginx and other reverse proxies from buffering the stream
       "X-Accel-Buffering": "no",
-    });
+    };
+
+    // Tell Fastify that we are managing the raw response ourselves.
+    reply.hijack();
+
+    // Commit the response headers.
+    reply.raw.writeHead(200, responseHeaders);
 
     // Track whether the client closed the connection early
     let clientClosed = false;

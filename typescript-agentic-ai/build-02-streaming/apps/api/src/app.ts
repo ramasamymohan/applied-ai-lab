@@ -18,7 +18,7 @@ export async function buildApp(options: BuildAppOptions) {
 
   await app.register(cors, {
     origin: options.webOrigin,
-    methods: ["GET", "POST"],
+    methods: ["GET", "POST", "OPTIONS"],
   });
 
   await app.register(rateLimit, {

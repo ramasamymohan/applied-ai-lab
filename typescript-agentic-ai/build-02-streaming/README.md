@@ -161,7 +161,7 @@ Starts on `http://localhost:5173`.
 
 ```
 OPENAI_API_KEY=sk-...     # required — backend only, never exposed to the browser
-OPENAI_MODEL=gpt-4o-mini  # optional, default: gpt-4o-mini
+OPENAI_MODEL=gpt-6-luna  # optional, default: gpt-6-luna
 PORT=3000                  # optional, default: 3000
 WEB_ORIGIN=http://localhost:5173  # optional, default: http://localhost:5173
 NODE_ENV=development       # optional, default: development
