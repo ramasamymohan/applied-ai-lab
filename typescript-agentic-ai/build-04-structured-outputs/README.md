@@ -2,8 +2,6 @@
 
 Part of the **From Prompt to Platform** series. Each build in this series is a fully independent, standalone application.
 
-> **Status: implemented across three commits.** Lint, type-check, and build results are not recorded here; run the validation commands below. Nothing in this build has been exercised against a live database or provider by the author of these docs unless stated.
-
 ---
 
 ## Objective

@@ -30,8 +30,6 @@ Build 02 is unchanged and still independently runnable.
 
 ## Current status — Commit 03 (build complete)
 
-The build is implemented across three commits:
-
 1. **PostgreSQL foundation** — schema, migrations, repositories, pool lifecycle, startup recovery.
 2. **Conversation APIs and persistent streaming** — conversation endpoints, context-aware model calls, assistant messages finalized in the database.
 3. **React conversation experience** — conversation sidebar, history reload after refresh, continuing a conversation, and stop/error handling that reconciles with the database.
