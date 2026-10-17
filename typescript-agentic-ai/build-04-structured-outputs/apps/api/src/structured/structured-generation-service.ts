@@ -25,7 +25,7 @@
  * every `ok` result has passed contract.schema.safeParse().
  *
  * generate() never throws. Errors are returned as values so callers (the turn
- * lifecycle in Commit 02) cannot forget a failure path.
+ * lifecycle) cannot forget a failure path.
  */
 
 import type { z } from "zod";

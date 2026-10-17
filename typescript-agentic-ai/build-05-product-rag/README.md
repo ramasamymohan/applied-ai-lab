@@ -22,27 +22,16 @@ This build does **not** add reranking, query rewriting, tool calling, live inven
 | Grounding | None | Model picks SKUs from retrieved candidates; application verifies them and composes the reply from database rows |
 | Persistence | conversations, messages, turn_analyses | + `product_embeddings`, `turn_groundings` (migration 005) |
 | SSE events | delta, done, error, analysis | + optional `grounding` (additive) |
-| UI | Chat + analysis chips | Planned: product cards (Commit 04) |
+| UI | Chat + analysis chips | Planned: product cards |
 
 Build 04 is unchanged and still independently runnable. The structured-output layer, turn lifecycle, SSE events, and API are described in the [Build 04 README](../build-04-structured-outputs/README.md) and are inherited as-is.
 
-## Commit plan
-
-| # | Scope | Status |
-|---|---|---|
-| 01 | Catalog schema, pgvector tables, product repository, seed data and script | Done |
-| 02 | Idempotent embedding ingestion CLI (provider-isolated embedding service) | Done |
-| 03 | Retrieval service and grounded answers with verified product IDs | **Done (this commit)** |
-| 04 | Product cards in the web UI, empty states, final docs | Planned |
-
 ---
-
-## Commit 01: catalog and storage
 
 ### What exists
 
 ```
-products ──< product_embeddings (1:1, filled in Commit 02)
+products ──< product_embeddings
 ```
 
 - `apps/api/migrations/003_create-products.sql`: `products` table and `product_stock_status` enum.
@@ -50,8 +39,6 @@ products ──< product_embeddings (1:1, filled in Commit 02)
 - `apps/api/src/repositories/product-repository.ts`: `findById`, `findByIds`, `list` (filtered).
 - `apps/api/src/seed/product-seed-data.ts`: 120 hand-written fictional products, 12 categories × 10.
 - `apps/api/src/scripts/seed-products.ts`: idempotent seed script with `--dry-run`.
-
-As of this commit nothing was embedded and nothing queried the catalog from a request path; Commit 02 adds embedding ingestion and Commit 03 adds retrieval.
 
 ### Prerequisite: pgvector
 
@@ -122,7 +109,7 @@ The seed script reads `DATABASE_URL` only; it does not need `OPENAI_API_KEY`. It
 | `product_id` | UUID PK, FK | `ON DELETE CASCADE`; one embedding per product |
 | `model` | TEXT | Embedding model name, recorded per row |
 | `dimensions` | INTEGER | Checked against the vector's actual length |
-| `content_hash` | TEXT | Lets ingestion skip unchanged products (Commit 02) |
+| `content_hash` | TEXT | Lets ingestion skip unchanged products |
 | `embedding` | `vector(1536)` | |
 | `created_at`, `updated_at` | TIMESTAMPTZ | |
 
@@ -131,12 +118,12 @@ The seed script reads `DATABASE_URL` only; it does not need `OPENAI_API_KEY`. It
 - **The vector dimension is fixed in the column type.** `vector(1536)` assumes a 1536-dimension embedding model. Switching to a model with a different dimension needs a new migration and re-embedding. The `dimensions` column and a `CHECK (dimensions = vector_dims(embedding))` constraint exist so a mismatch fails loudly rather than corrupting search.
 - **HNSW index, honestly.** The index uses `vector_cosine_ops` with `m = 16`, `ef_construction = 64`. At 120 rows an exact sequential scan is already instant, and HNSW is approximate, so it can return slightly different results than an exact scan. It is included because it is what a larger catalog would need, and so the schema does not change later. It is not needed at this size.
 - **One embedding per product.** Simple and enough here; chunking is not justified by a catalog of short descriptions.
-- **`brand` column (deviation).** The plan's field list does not include `brand`. It was added because brand names are one of the places pure vector search is expected to be weak, which would be the justification for optional hybrid search in Commit 03. It is a plain column; remove it if you prefer to stay strictly on the plan.
+- **`brand` column (deviation).** The plan's field list does not include `brand`. It was added because brand names are one of the places pure vector search is expected to be weak, which would be the justification for optional hybrid search. It is a plain column; remove it if you prefer to stay strictly on the plan.
 - **Repository safety.** `findById`/`findByIds` ignore strings that are not valid UUIDs, so IDs supplied by a model can be passed in without a database error. `list` uses parameterized SQL only, clamps `limit` (default 20, max 100), and orders deterministically by `name, id`.
 
 ---
 
-## Commit 02: embedding ingestion
+## Embedding ingestion
 
 ```
 products ──> compose text ──> sha256 ──> changed? ──> batch ──> EmbeddingService ──> product_embeddings
@@ -168,7 +155,7 @@ The report prints `products`, `skipped`, `embedded`, `failed` (with SKU and a fa
 
 ### What is embedded
 
-Name, brand, category, description and attributes (attribute keys sorted, so the text is deterministic). **Price, stock status and SKU are deliberately excluded.** Price and stock change independently of what a product is and are read from the database at answer time, so a price change must not trigger a re-embed or leave a stale price inside a vector. SKU is an identifier, not meaning; if exact SKU lookup proves necessary it is a job for keyword search (Commit 03 considers this only if vector-only search observably fails).
+Name, brand, category, description and attributes (attribute keys sorted, so the text is deterministic). **Price, stock status and SKU are deliberately excluded.** Price and stock change independently of what a product is and are read from the database at answer time, so a price change must not trigger a re-embed or leave a stale price inside a vector. SKU is an identifier, not meaning; if exact SKU lookup proves necessary it is a job for keyword search.
 
 ### Idempotency
 
@@ -198,7 +185,7 @@ The provider call shapes (`embeddings.create`, the `dimensions` parameter, respo
 
 ---
 
-## Commit 03: retrieval and grounded answers
+## Retrieval and grounded answers
 
 ```
 message ──> analysis (Build 04) ──> decideTurn ──> intent = product_search?
@@ -295,10 +282,6 @@ Two optional `signal` properties in the inherited Build 04 code (`StreamReplyOpt
 
 ---
 
-## Environment variables
-
-Commit 01 adds none. Commit 02 adds the four `EMBEDDING_*` variables above and Commit 03 the four retrieval/grounding variables above (all defaulted). `OPENAI_API_KEY` stays backend-only; never place keys or secrets in `VITE_` variables.
-
 ## Local setup
 
 ```bash
@@ -330,7 +313,7 @@ These have not been run as part of this commit's documentation. Some inherited B
 - Stock status is static seed data, not live inventory.
 - Product searches are grounded only after migration 005 and ingestion have run; before that they fail as `catalog_not_indexed`.
 - The similarity floor and top-k are uncalibrated; retrieval quality, latency and cost are unmeasured.
-- The web client does not render grounding data yet (Commit 04); recommendations appear as plain text in the reply.
+- The web client does not render grounding data yet; recommendations appear as plain text in the reply.
 - Model-written intro and reasons are unverified prose.
 - A conversation reloaded from history shows the stored reply text; the `grounding` array holds IDs only.
 - Failed batches are not retried within a run; re-run the CLI.
@@ -339,4 +322,4 @@ These have not been run as part of this commit's documentation. Some inherited B
 
 ## Next constraint
 
-Recommendations exist only as text in the reply. Commit 04 renders product cards from the verified `grounding` data, with empty and "nothing matched" states.
+Recommendations exist only as text in the reply. Renders product cards from the verified `grounding` data, with empty and "nothing matched" states.

@@ -28,7 +28,7 @@ Build 02 is unchanged and still independently runnable.
 
 ---
 
-## Current status — Commit 03 (build complete)
+## Current status
 
 1. **PostgreSQL foundation** — schema, migrations, repositories, pool lifecycle, startup recovery.
 2. **Conversation APIs and persistent streaming** — conversation endpoints, context-aware model calls, assistant messages finalized in the database.
@@ -216,7 +216,7 @@ pnpm migrate:down
 
 ```
 OPENAI_API_KEY=sk-...            # required — backend only
-OPENAI_MODEL=gpt-4o-mini         # optional, default: gpt-4o-mini
+OPENAI_MODEL=gpt-6-luna         # optional, default: gpt-6-luna
 PORT=3000                         # optional, default: 3000
 WEB_ORIGIN=http://localhost:5173  # optional, default: http://localhost:5173
 NODE_ENV=development              # optional, default: development

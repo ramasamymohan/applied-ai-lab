@@ -24,17 +24,9 @@ This build does not add retrieval, tools, or agent loops. It builds the contract
 
 Build 03 is unchanged and still independently runnable.
 
-## Commit plan
-
-| # | Scope | Status |
-|---|---|---|
-| 01 | Structured generation layer, failure taxonomy, repair retry, config, `ShoppingRequest` contract | Done |
-| 02 | Request understanding in the turn lifecycle (`turn_analyses` table, `analysis` SSE event) | Done |
-| 03 | Frontend and documentation | **Done (this commit)** |
-
 ---
 
-## Structured generation layer (Commit 01)
+## Structured generation layer
 
 ```
 caller
@@ -68,7 +60,7 @@ OpenAI Responses adapter               strict json_schema output format
 | `services/conversation-service.ts` | Turn lifecycle: analyze, persist, decide, reply |
 
 
-### Turn lifecycle (Commit 02)
+### Turn lifecycle
 
 ```
 POST /api/conversations/:id/messages
@@ -144,7 +136,7 @@ Deviation from the plan's draft: `schema_version` is applied by the application 
 
 > The exact set of keywords a given model accepts in strict mode changes over time. The disallowed list is deliberately conservative and should be re-checked against current provider documentation.
 
-## Frontend (Commit 03)
+## Frontend
 
 ```
 apps/web/src
@@ -225,7 +217,7 @@ Reading: stored payloads are re-validated on read against the contract they were
 
 ```
 OPENAI_API_KEY=sk-...            # required — backend only
-OPENAI_MODEL=gpt-4o-mini         # optional, default: gpt-4o-mini
+OPENAI_MODEL=gpt-6-luna         # optional, default: gpt-6-luna
 PORT=3000                         # optional, default: 3000
 WEB_ORIGIN=http://localhost:5173  # optional, default: http://localhost:5173
 NODE_ENV=development              # optional, default: development

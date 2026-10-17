@@ -8,7 +8,7 @@ const EnvironmentSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   WEB_ORIGIN: z.string().url().default("http://localhost:5173"),
   OPENAI_API_KEY: z.string().min(1, "OPENAI_API_KEY is required"),
-  OPENAI_MODEL: z.string().min(1).default("gpt-4o-mini"),
+  OPENAI_MODEL: z.string().min(1).default("gpt-6-luna"),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   MAX_CONTEXT_TURNS: z.coerce.number().int().min(1).max(100).default(10),
 
